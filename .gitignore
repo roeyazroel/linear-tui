@@ -30,7 +30,10 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
-linear-tui
+
+# Built binary (only at root level, not cmd/linear-tui/)
+/linear-tui
+/main
 
 .cursor/
 dist/
