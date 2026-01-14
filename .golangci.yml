@@ -1,6 +1,8 @@
 # golangci-lint configuration for linear-tui
 # Documentation: https://golangci-lint.run/usage/configuration/
 
+version: 2
+
 run:
   timeout: 5m
   modules-download-mode: readonly
@@ -9,7 +11,6 @@ linters:
   enable:
     # Default linters
     - errcheck
-    - gosimple
     - govet
     - ineffassign
     - staticcheck
@@ -24,8 +25,6 @@ linters:
     - goconst
     - gocritic
     - gocyclo
-    - gofmt
-    - goimports
     - goprintffuncname
     - gosec
     - misspell
@@ -35,10 +34,14 @@ linters:
     - prealloc
     - revive
     - rowserrcheck
-    - stylecheck
     - unconvert
     - unparam
     - whitespace
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
 
 linters-settings:
   errcheck:
@@ -90,11 +93,6 @@ linters-settings:
       - name: unused-parameter
       - name: unreachable-code
       - name: redefines-builtin-id
-
-  stylecheck:
-    checks:
-      - all
-      - -ST1000 # Package comments (handled by revive)
 
 issues:
   exclude-rules:
