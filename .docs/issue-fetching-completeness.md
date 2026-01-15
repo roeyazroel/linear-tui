@@ -40,12 +40,13 @@ flowchart TD
 ## Tasks
 ### Completed
 - [x] Capture pagination gap and progress requirement.
+- [x] Add pagination-aware tests in `internal/linearapi/client_test.go`.
+- [x] Implement cursor pagination in `FetchIssues` and progress callbacks.
+- [x] Update `App.refreshIssues` to show per-page progress.
 ### In Progress
-- [ ] Add pagination-aware tests in `internal/linearapi/client_test.go`.
-### Future
-- [ ] Implement cursor pagination in `FetchIssues` and progress callbacks.
-- [ ] Update `App.refreshIssues` to show per-page progress.
 - [ ] Run `go test ./...`.
+### Future
+- [ ] Evaluate pagination latency in large workspaces.
 
 ## Relevant Files
 - `internal/linearapi/client.go`

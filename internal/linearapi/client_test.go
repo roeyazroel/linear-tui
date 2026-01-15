@@ -3,11 +3,50 @@ package linearapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 )
+
+// issueNodeJSON returns a JSON object string for an issue node used in tests.
+func issueNodeJSON(id, identifier, title string) string {
+	return fmt.Sprintf(`{
+		"id": %q,
+		"identifier": %q,
+		"title": %q,
+		"state": {"id": "state-1", "name": "Todo"},
+		"assignee": null,
+		"priority": 1,
+		"updatedAt": "2025-01-01T00:00:00Z",
+		"createdAt": "2025-01-01T00:00:00Z",
+		"description": null,
+		"team": {"id": "team-1"},
+		"project": null,
+		"labels": {"nodes": []},
+		"url": "https://linear.app/issue/%s",
+		"archivedAt": null,
+		"parent": null,
+		"children": {"nodes": []}
+	}`, id, identifier, title, identifier)
+}
+
+// issuesPageResponse builds a GraphQL response with issue nodes and page info.
+func issuesPageResponse(nodes []string, hasNextPage bool, endCursor string) string {
+	return fmt.Sprintf(`{
+		"data": {
+			"issues": {
+				"nodes": [%s],
+				"pageInfo": {
+					"hasNextPage": %t,
+					"endCursor": %q
+				}
+			}
+		}
+	}`, strings.Join(nodes, ","), hasNextPage, endCursor)
+}
 
 func TestNewClient(t *testing.T) {
 	token := "test-token-123"
@@ -145,7 +184,11 @@ func TestFetchIssues_RequestFormat(t *testing.T) {
 		response := `{
 			"data": {
 				"issues": {
-					"nodes": []
+					"nodes": [],
+					"pageInfo": {
+						"hasNextPage": false,
+						"endCursor": ""
+					}
 				}
 			}
 		}`
@@ -167,6 +210,157 @@ func TestFetchIssues_RequestFormat(t *testing.T) {
 		// We expect this might fail due to GraphQL parsing, but we've verified
 		// the request format is correct
 		t.Logf("FetchIssues() error (expected for test): %v", err)
+	}
+}
+
+// TestFetchIssues_PaginatesAllPages verifies that all pages are fetched and concatenated.
+func TestFetchIssues_PaginatesAllPages(t *testing.T) {
+	var afterValues []interface{}
+	requestCount := 0
+
+	pageOne := issuesPageResponse([]string{
+		issueNodeJSON("issue-1", "ABC-1", "First issue"),
+	}, true, "cursor-1")
+	pageTwo := issuesPageResponse([]string{
+		issueNodeJSON("issue-2", "ABC-2", "Second issue"),
+		issueNodeJSON("issue-3", "ABC-3", "Third issue"),
+	}, false, "cursor-2")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var reqBody map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+			t.Fatalf("Failed to decode request body: %v", err)
+		}
+		variables, ok := reqBody["variables"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("Request body missing variables")
+		}
+		afterValues = append(afterValues, variables["after"])
+
+		w.Header().Set("Content-Type", "application/json")
+		if requestCount == 0 {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(pageOne))
+		} else {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(pageTwo))
+		}
+		requestCount++
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientConfig{
+		Token:    "test-token",
+		Endpoint: server.URL,
+	})
+
+	issues, err := client.FetchIssues(context.Background(), FetchIssuesParams{First: 2})
+	if err != nil {
+		t.Fatalf("FetchIssues() error: %v", err)
+	}
+
+	if requestCount != 2 {
+		t.Fatalf("Expected 2 requests, got %d", requestCount)
+	}
+	if len(afterValues) != 2 {
+		t.Fatalf("Expected 2 after values, got %d", len(afterValues))
+	}
+	if afterValues[0] != nil {
+		t.Errorf("First request after = %#v, want nil", afterValues[0])
+	}
+	if afterValues[1] != "cursor-1" {
+		t.Errorf("Second request after = %#v, want %q", afterValues[1], "cursor-1")
+	}
+
+	if len(issues) != 3 {
+		t.Fatalf("Fetched issues = %d, want 3", len(issues))
+	}
+	if issues[0].ID != "issue-1" || issues[1].ID != "issue-2" || issues[2].ID != "issue-3" {
+		t.Errorf("Fetched issues order = [%s, %s, %s], want issue-1, issue-2, issue-3",
+			issues[0].ID, issues[1].ID, issues[2].ID)
+	}
+}
+
+// TestFetchIssues_ProgressCallback verifies progress updates per page.
+func TestFetchIssues_ProgressCallback(t *testing.T) {
+	pageOne := issuesPageResponse([]string{
+		issueNodeJSON("issue-1", "ABC-1", "First issue"),
+	}, true, "cursor-1")
+	pageTwo := issuesPageResponse([]string{
+		issueNodeJSON("issue-2", "ABC-2", "Second issue"),
+		issueNodeJSON("issue-3", "ABC-3", "Third issue"),
+	}, false, "cursor-2")
+
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if requestCount == 0 {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(pageOne))
+		} else {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(pageTwo))
+		}
+		requestCount++
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientConfig{
+		Token:    "test-token",
+		Endpoint: server.URL,
+	})
+
+	progressCalls := make([]IssueFetchProgress, 0)
+	params := FetchIssuesParams{
+		First: 2,
+		OnProgress: func(progress IssueFetchProgress) {
+			progressCalls = append(progressCalls, progress)
+		},
+	}
+
+	_, err := client.FetchIssues(context.Background(), params)
+	if err != nil {
+		t.Fatalf("FetchIssues() error: %v", err)
+	}
+
+	if len(progressCalls) != 2 {
+		t.Fatalf("Progress calls = %d, want 2", len(progressCalls))
+	}
+	if progressCalls[0].Page != 1 || progressCalls[0].Fetched != 1 {
+		t.Errorf("First progress = %+v, want Page=1 Fetched=1", progressCalls[0])
+	}
+	if progressCalls[1].Page != 2 || progressCalls[1].Fetched != 3 {
+		t.Errorf("Second progress = %+v, want Page=2 Fetched=3", progressCalls[1])
+	}
+}
+
+// TestFetchIssues_StopsWhenNoNextPage verifies pagination stops at the last page.
+func TestFetchIssues_StopsWhenNoNextPage(t *testing.T) {
+	requestCount := 0
+	response := issuesPageResponse([]string{
+		issueNodeJSON("issue-1", "ABC-1", "First issue"),
+	}, false, "cursor-1")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(response))
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientConfig{
+		Token:    "test-token",
+		Endpoint: server.URL,
+	})
+
+	_, err := client.FetchIssues(context.Background(), FetchIssuesParams{First: 1})
+	if err != nil {
+		t.Fatalf("FetchIssues() error: %v", err)
+	}
+
+	if requestCount != 1 {
+		t.Fatalf("Expected 1 request, got %d", requestCount)
 	}
 }
 

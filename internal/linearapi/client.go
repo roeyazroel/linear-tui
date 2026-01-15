@@ -206,6 +206,12 @@ type Issue struct {
 	Comments    []Comment       // Comments on this issue
 }
 
+// IssueFetchProgress describes progress for a paginated issue fetch.
+type IssueFetchProgress struct {
+	Page    int
+	Fetched int
+}
+
 // FetchIssuesParams contains parameters for fetching issues.
 type FetchIssuesParams struct {
 	TeamID    string
@@ -215,6 +221,8 @@ type FetchIssuesParams struct {
 	// "priority" is also supported and will be sorted client-side after fetching.
 	OrderBy string
 	First   int
+	// OnProgress is an optional callback invoked after each page is fetched.
+	OnProgress func(IssueFetchProgress)
 }
 
 // CreateIssueInput contains input for creating a new issue.
@@ -535,59 +543,6 @@ func (c *Client) FetchIssues(ctx context.Context, params FetchIssuesParams) ([]I
 	}
 
 	// Build the filter based on params
-	var query struct {
-		Issues struct {
-			Nodes []struct {
-				ID         graphql.String
-				Identifier graphql.String
-				Title      graphql.String
-				State      struct {
-					ID   graphql.String
-					Name graphql.String
-				}
-				Assignee *struct {
-					ID   graphql.String
-					Name graphql.String
-				}
-				Priority    graphql.Float
-				UpdatedAt   graphql.String
-				CreatedAt   graphql.String
-				Description *graphql.String
-				Team        struct {
-					ID graphql.String
-				}
-				Project *struct {
-					ID graphql.String
-				}
-				Labels struct {
-					Nodes []struct {
-						ID    graphql.String
-						Name  graphql.String
-						Color graphql.String
-					}
-				}
-				URL        graphql.String
-				ArchivedAt *graphql.String
-				Parent     *struct {
-					ID         graphql.String
-					Identifier graphql.String
-					Title      graphql.String
-				}
-				Children struct {
-					Nodes []struct {
-						ID         graphql.String
-						Identifier graphql.String
-						Title      graphql.String
-						State      struct {
-							ID   graphql.String
-							Name graphql.String
-						}
-					}
-				}
-			}
-		} `graphql:"issues(first: $first, filter: $filter, orderBy: $orderBy)"`
-	}
-
 	// Build filter
 	filter := buildIssueFilter(params)
 
@@ -601,94 +556,171 @@ func (c *Client) FetchIssues(ctx context.Context, params FetchIssuesParams) ([]I
 		orderBy = OrderByUpdatedAt
 	}
 
-	variables := map[string]interface{}{
-		"first":   graphql.Int(first),
-		"filter":  filter,
-		"orderBy": orderBy,
-	}
-
-	err := c.client.Query(ctx, &query, variables)
-	if err != nil {
-		logger.ErrorWithErr(err, "API: FetchIssues failed")
-		return nil, fmt.Errorf("fetch issues: %w", err)
-	}
-
-	issues := make([]Issue, 0, len(query.Issues.Nodes))
-	for _, node := range query.Issues.Nodes {
-		updatedAt := parseTime(string(node.UpdatedAt))
-		createdAt := parseTime(string(node.CreatedAt))
-
-		assignee := ""
-		assigneeID := ""
-		if node.Assignee != nil {
-			assignee = string(node.Assignee.Name)
-			assigneeID = string(node.Assignee.ID)
+	var after *graphql.String
+	page := 0
+	issues := make([]Issue, 0)
+	for {
+		var query struct {
+			Issues struct {
+				Nodes []struct {
+					ID         graphql.String
+					Identifier graphql.String
+					Title      graphql.String
+					State      struct {
+						ID   graphql.String
+						Name graphql.String
+					}
+					Assignee *struct {
+						ID   graphql.String
+						Name graphql.String
+					}
+					Priority    graphql.Float
+					UpdatedAt   graphql.String
+					CreatedAt   graphql.String
+					Description *graphql.String
+					Team        struct {
+						ID graphql.String
+					}
+					Project *struct {
+						ID graphql.String
+					}
+					Labels struct {
+						Nodes []struct {
+							ID    graphql.String
+							Name  graphql.String
+							Color graphql.String
+						}
+					}
+					URL        graphql.String
+					ArchivedAt *graphql.String
+					Parent     *struct {
+						ID         graphql.String
+						Identifier graphql.String
+						Title      graphql.String
+					}
+					Children struct {
+						Nodes []struct {
+							ID         graphql.String
+							Identifier graphql.String
+							Title      graphql.String
+							State      struct {
+								ID   graphql.String
+								Name graphql.String
+							}
+						}
+					}
+				}
+				PageInfo struct {
+					HasNextPage graphql.Boolean
+					EndCursor   graphql.String
+				}
+			} `graphql:"issues(first: $first, after: $after, filter: $filter, orderBy: $orderBy)"`
 		}
 
-		description := ""
-		if node.Description != nil {
-			description = string(*node.Description)
+		variables := map[string]interface{}{
+			"first":   graphql.Int(first),
+			"filter":  filter,
+			"orderBy": orderBy,
+			"after":   after,
 		}
 
-		projectID := ""
-		if node.Project != nil {
-			projectID = string(node.Project.ID)
+		err := c.client.Query(ctx, &query, variables)
+		if err != nil {
+			logger.ErrorWithErr(err, "API: FetchIssues failed")
+			return nil, fmt.Errorf("fetch issues: %w", err)
 		}
 
-		archived := node.ArchivedAt != nil
+		for _, node := range query.Issues.Nodes {
+			updatedAt := parseTime(string(node.UpdatedAt))
+			createdAt := parseTime(string(node.CreatedAt))
 
-		// Parse labels
-		labels := make([]IssueLabel, 0, len(node.Labels.Nodes))
-		for _, lbl := range node.Labels.Nodes {
-			labels = append(labels, IssueLabel{
-				ID:    string(lbl.ID),
-				Name:  string(lbl.Name),
-				Color: string(lbl.Color),
-			})
-		}
-
-		// Parse parent
-		var parent *IssueRef
-		if node.Parent != nil {
-			parent = &IssueRef{
-				ID:         string(node.Parent.ID),
-				Identifier: string(node.Parent.Identifier),
-				Title:      string(node.Parent.Title),
+			assignee := ""
+			assigneeID := ""
+			if node.Assignee != nil {
+				assignee = string(node.Assignee.Name)
+				assigneeID = string(node.Assignee.ID)
 			}
-		}
 
-		// Parse children
-		children := make([]IssueChildRef, 0, len(node.Children.Nodes))
-		for _, child := range node.Children.Nodes {
-			children = append(children, IssueChildRef{
-				ID:         string(child.ID),
-				Identifier: string(child.Identifier),
-				Title:      string(child.Title),
-				State:      string(child.State.Name),
-				StateID:    string(child.State.ID),
+			description := ""
+			if node.Description != nil {
+				description = string(*node.Description)
+			}
+
+			projectID := ""
+			if node.Project != nil {
+				projectID = string(node.Project.ID)
+			}
+
+			archived := node.ArchivedAt != nil
+
+			// Parse labels
+			labels := make([]IssueLabel, 0, len(node.Labels.Nodes))
+			for _, lbl := range node.Labels.Nodes {
+				labels = append(labels, IssueLabel{
+					ID:    string(lbl.ID),
+					Name:  string(lbl.Name),
+					Color: string(lbl.Color),
+				})
+			}
+
+			// Parse parent
+			var parent *IssueRef
+			if node.Parent != nil {
+				parent = &IssueRef{
+					ID:         string(node.Parent.ID),
+					Identifier: string(node.Parent.Identifier),
+					Title:      string(node.Parent.Title),
+				}
+			}
+
+			// Parse children
+			children := make([]IssueChildRef, 0, len(node.Children.Nodes))
+			for _, child := range node.Children.Nodes {
+				children = append(children, IssueChildRef{
+					ID:         string(child.ID),
+					Identifier: string(child.Identifier),
+					Title:      string(child.Title),
+					State:      string(child.State.Name),
+					StateID:    string(child.State.ID),
+				})
+			}
+
+			issues = append(issues, Issue{
+				ID:          string(node.ID),
+				Identifier:  string(node.Identifier),
+				Title:       string(node.Title),
+				State:       string(node.State.Name),
+				StateID:     string(node.State.ID),
+				Assignee:    assignee,
+				AssigneeID:  assigneeID,
+				Priority:    int(node.Priority),
+				UpdatedAt:   updatedAt,
+				CreatedAt:   createdAt,
+				Description: description,
+				TeamID:      string(node.Team.ID),
+				ProjectID:   projectID,
+				URL:         string(node.URL),
+				Archived:    archived,
+				Labels:      labels,
+				Parent:      parent,
+				Children:    children,
 			})
 		}
 
-		issues = append(issues, Issue{
-			ID:          string(node.ID),
-			Identifier:  string(node.Identifier),
-			Title:       string(node.Title),
-			State:       string(node.State.Name),
-			StateID:     string(node.State.ID),
-			Assignee:    assignee,
-			AssigneeID:  assigneeID,
-			Priority:    int(node.Priority),
-			UpdatedAt:   updatedAt,
-			CreatedAt:   createdAt,
-			Description: description,
-			TeamID:      string(node.Team.ID),
-			ProjectID:   projectID,
-			URL:         string(node.URL),
-			Archived:    archived,
-			Labels:      labels,
-			Parent:      parent,
-			Children:    children,
-		})
+		page++
+		if params.OnProgress != nil {
+			params.OnProgress(IssueFetchProgress{
+				Page:    page,
+				Fetched: len(issues),
+			})
+		}
+
+		if !bool(query.Issues.PageInfo.HasNextPage) {
+			break
+		}
+
+		nextCursor := query.Issues.PageInfo.EndCursor
+		after = &nextCursor
 	}
 
 	// Sort by priority client-side if requested.

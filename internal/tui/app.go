@@ -751,6 +751,11 @@ func (a *App) refreshIssues(issueID ...string) {
 			Search:  a.searchQuery,
 			OrderBy: string(a.sortField),
 		}
+		params.OnProgress = func(progress linearapi.IssueFetchProgress) {
+			a.app.QueueUpdateDraw(func() {
+				a.statusBar.SetText(fmt.Sprintf("[yellow]Loading issues (page %d, fetched %d)...[-]", progress.Page, progress.Fetched))
+			})
+		}
 
 		// Apply team/project filter based on navigation selection
 		if a.selectedNavigation != nil {
