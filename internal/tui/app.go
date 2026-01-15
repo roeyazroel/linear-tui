@@ -356,6 +356,12 @@ func (a *App) bindGlobalKeys() {
 
 		// Global shortcuts (only when not in palette)
 		switch event.Key() {
+		case tcell.KeyEscape:
+			// Clear search if active (when not in modals/palette)
+			if a.searchQuery != "" {
+				a.setSearchQuery("")
+				return nil
+			}
 		case tcell.KeyCtrlC:
 			a.app.Stop()
 			return nil
@@ -492,6 +498,12 @@ func (a *App) handleDetailsKey(event *tcell.EventKey) *tcell.EventKey {
 func (a *App) handlePaletteKey(event *tcell.EventKey) *tcell.EventKey {
 	switch event.Key() {
 	case tcell.KeyEscape:
+		if a.paletteCtrl.IsSearchMode() {
+			// In search mode, clear search and close palette
+			a.closePaletteUI()
+			a.setSearchQuery("")
+			return nil
+		}
 		a.closePalette()
 		return nil
 	case tcell.KeyEnter:

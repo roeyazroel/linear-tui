@@ -388,7 +388,6 @@ func TestBuildIssueFilter_SearchTerms(t *testing.T) {
 				"or": []map[string]interface{}{
 					{"title": map[string]interface{}{"containsIgnoreCase": "ABC-123"}},
 					{"description": map[string]interface{}{"containsIgnoreCase": "ABC-123"}},
-					{"identifier": map[string]interface{}{"containsIgnoreCase": "ABC-123"}},
 				},
 			},
 		},
@@ -401,14 +400,12 @@ func TestBuildIssueFilter_SearchTerms(t *testing.T) {
 						"or": []map[string]interface{}{
 							{"title": map[string]interface{}{"containsIgnoreCase": "login"}},
 							{"description": map[string]interface{}{"containsIgnoreCase": "login"}},
-							{"identifier": map[string]interface{}{"containsIgnoreCase": "login"}},
 						},
 					},
 					{
 						"or": []map[string]interface{}{
 							{"title": map[string]interface{}{"containsIgnoreCase": "bug"}},
 							{"description": map[string]interface{}{"containsIgnoreCase": "bug"}},
-							{"identifier": map[string]interface{}{"containsIgnoreCase": "bug"}},
 						},
 					},
 				},
@@ -423,7 +420,6 @@ func TestBuildIssueFilter_SearchTerms(t *testing.T) {
 				"or": []map[string]interface{}{
 					{"title": map[string]interface{}{"containsIgnoreCase": "issue"}},
 					{"description": map[string]interface{}{"containsIgnoreCase": "issue"}},
-					{"identifier": map[string]interface{}{"containsIgnoreCase": "issue"}},
 				},
 			},
 		},

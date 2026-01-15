@@ -527,11 +527,12 @@ func buildIssueFilter(params FetchIssuesParams) IssueFilter {
 }
 
 // buildSearchOrFilters returns per-term OR filters for issue search.
+// Note: identifier is not a filterable field in Linear's IssueFilter type,
+// so we only filter by title and description.
 func buildSearchOrFilters(term string) []map[string]interface{} {
 	return []map[string]interface{}{
 		{"title": map[string]interface{}{"containsIgnoreCase": term}},
 		{"description": map[string]interface{}{"containsIgnoreCase": term}},
-		{"identifier": map[string]interface{}{"containsIgnoreCase": term}},
 	}
 }
 

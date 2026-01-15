@@ -69,10 +69,11 @@ func DefaultCommands(app *App) []Command {
 			},
 		},
 		{
-			ID:           "clear_search",
-			Title:        "Clear search",
-			Keywords:     []string{"clear", "reset"},
-			ShortcutRune: 'k',
+			ID:       "clear_search",
+			Title:    "Clear search",
+			Keywords: []string{"clear", "reset"},
+			// No shortcut - ⌘+K conflicts with Warp terminal's "Clear Blocks" command
+			// Use command palette (:) or search palette (/) to clear search
 			Run: func(a *App) {
 				a.setSearchQuery("")
 			},

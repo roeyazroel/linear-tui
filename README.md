@@ -131,11 +131,11 @@ export LINEAR_LOG_FILE=""
 
 - `:` - Open command palette
 - `/` - Open search palette
+- `Esc` - Clear search (when search is active)
 
 ### Command Shortcuts (⌘+key on macOS, Ctrl+key on Linux/Windows)
 
 - `⌘+R` / `Ctrl+R` - Refresh issues
-- `⌘+K` / `Ctrl+K` - Clear search
 - `⌘+N` / `Ctrl+N` - Create new issue
 - `⌘+E` / `Ctrl+E` - Edit issue title
 - `⌘+L` / `Ctrl+L` - Edit issue labels
