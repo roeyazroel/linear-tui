@@ -72,7 +72,7 @@ func DefaultCommands(app *App) []Command {
 			ID:           "clear_search",
 			Title:        "Clear search",
 			Keywords:     []string{"clear", "reset"},
-			ShortcutRune: 'c',
+			ShortcutRune: 'k',
 			Run: func(a *App) {
 				a.setSearchQuery("")
 			},

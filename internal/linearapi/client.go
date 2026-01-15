@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/roeyazroel/linear-tui/internal/logger"
@@ -485,6 +486,47 @@ func (c *Client) ListWorkflowStates(ctx context.Context, teamID string) ([]Workf
 	return states, nil
 }
 
+// buildIssueFilter builds the GraphQL issue filter for the given params.
+func buildIssueFilter(params FetchIssuesParams) IssueFilter {
+	filter := make(IssueFilter)
+	if params.TeamID != "" {
+		filter["team"] = map[string]interface{}{"id": map[string]interface{}{"eq": params.TeamID}}
+	}
+	if params.ProjectID != "" {
+		filter["project"] = map[string]interface{}{"id": map[string]interface{}{"eq": params.ProjectID}}
+	}
+
+	searchTerm := strings.TrimSpace(params.Search)
+	if searchTerm == "" {
+		return filter
+	}
+
+	terms := strings.Fields(searchTerm)
+	if len(terms) == 1 {
+		filter["or"] = buildSearchOrFilters(terms[0])
+		return filter
+	}
+
+	// Require every term to match at least one field for free-text search.
+	andFilters := make([]map[string]interface{}, 0, len(terms))
+	for _, term := range terms {
+		andFilters = append(andFilters, map[string]interface{}{
+			"or": buildSearchOrFilters(term),
+		})
+	}
+	filter["and"] = andFilters
+	return filter
+}
+
+// buildSearchOrFilters returns per-term OR filters for issue search.
+func buildSearchOrFilters(term string) []map[string]interface{} {
+	return []map[string]interface{}{
+		{"title": map[string]interface{}{"containsIgnoreCase": term}},
+		{"description": map[string]interface{}{"containsIgnoreCase": term}},
+		{"identifier": map[string]interface{}{"containsIgnoreCase": term}},
+	}
+}
+
 // FetchIssues fetches issues with optional filtering and sorting.
 func (c *Client) FetchIssues(ctx context.Context, params FetchIssuesParams) ([]Issue, error) {
 	first := params.First
@@ -547,19 +589,7 @@ func (c *Client) FetchIssues(ctx context.Context, params FetchIssuesParams) ([]I
 	}
 
 	// Build filter
-	filter := make(IssueFilter)
-	if params.TeamID != "" {
-		filter["team"] = map[string]interface{}{"id": map[string]interface{}{"eq": params.TeamID}}
-	}
-	if params.ProjectID != "" {
-		filter["project"] = map[string]interface{}{"id": map[string]interface{}{"eq": params.ProjectID}}
-	}
-	if params.Search != "" {
-		filter["or"] = []map[string]interface{}{
-			{"title": map[string]interface{}{"containsIgnoreCase": params.Search}},
-			{"description": map[string]interface{}{"containsIgnoreCase": params.Search}},
-		}
-	}
+	filter := buildIssueFilter(params)
 
 	// Determine if client-side sorting is needed.
 	// Linear API only supports "createdAt" and "updatedAt" for PaginationOrderBy.

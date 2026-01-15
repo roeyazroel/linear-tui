@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 )
 
@@ -176,6 +177,71 @@ func TestFetchIssuesParams_Defaults(t *testing.T) {
 	}
 	if params.OrderBy != "" {
 		t.Errorf("Default OrderBy = %q, want empty string (will default to updatedAt)", params.OrderBy)
+	}
+}
+
+// TestBuildIssueFilter_SearchTerms verifies search term filtering behavior.
+func TestBuildIssueFilter_SearchTerms(t *testing.T) {
+	tests := []struct {
+		name   string
+		params FetchIssuesParams
+		want   IssueFilter
+	}{
+		{
+			name:   "single term includes identifier",
+			params: FetchIssuesParams{Search: "ABC-123"},
+			want: IssueFilter{
+				"or": []map[string]interface{}{
+					{"title": map[string]interface{}{"containsIgnoreCase": "ABC-123"}},
+					{"description": map[string]interface{}{"containsIgnoreCase": "ABC-123"}},
+					{"identifier": map[string]interface{}{"containsIgnoreCase": "ABC-123"}},
+				},
+			},
+		},
+		{
+			name:   "multiple terms require each term",
+			params: FetchIssuesParams{Search: "login bug"},
+			want: IssueFilter{
+				"and": []map[string]interface{}{
+					{
+						"or": []map[string]interface{}{
+							{"title": map[string]interface{}{"containsIgnoreCase": "login"}},
+							{"description": map[string]interface{}{"containsIgnoreCase": "login"}},
+							{"identifier": map[string]interface{}{"containsIgnoreCase": "login"}},
+						},
+					},
+					{
+						"or": []map[string]interface{}{
+							{"title": map[string]interface{}{"containsIgnoreCase": "bug"}},
+							{"description": map[string]interface{}{"containsIgnoreCase": "bug"}},
+							{"identifier": map[string]interface{}{"containsIgnoreCase": "bug"}},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:   "trims search and preserves team filters",
+			params: FetchIssuesParams{TeamID: "team-1", ProjectID: "project-1", Search: "  issue  "},
+			want: IssueFilter{
+				"team":    map[string]interface{}{"id": map[string]interface{}{"eq": "team-1"}},
+				"project": map[string]interface{}{"id": map[string]interface{}{"eq": "project-1"}},
+				"or": []map[string]interface{}{
+					{"title": map[string]interface{}{"containsIgnoreCase": "issue"}},
+					{"description": map[string]interface{}{"containsIgnoreCase": "issue"}},
+					{"identifier": map[string]interface{}{"containsIgnoreCase": "issue"}},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildIssueFilter(tt.params)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("buildIssueFilter() = %#v, want %#v", got, tt.want)
+			}
+		})
 	}
 }
 
