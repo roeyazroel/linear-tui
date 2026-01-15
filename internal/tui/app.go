@@ -80,8 +80,10 @@ type App struct {
 	workflowStates []linearapi.WorkflowState
 
 	// Loading state
-	isLoading    bool
-	pickerActive bool
+	isLoading             bool
+	pendingRefresh        bool
+	pendingRefreshIssueID string
+	pickerActive          bool
 
 	// Race-safety for issue detail fetching
 	fetchingIssueID string // Tracks which issue ID we're currently fetching
@@ -702,10 +704,36 @@ func (a *App) closePaletteUI() {
 	a.pages.HidePage("palette")
 }
 
+// queueIssuesRefresh records a refresh request while a fetch is in progress.
+func (a *App) queueIssuesRefresh(issueID ...string) {
+	a.pendingRefresh = true
+	if len(issueID) > 0 {
+		a.pendingRefreshIssueID = issueID[0]
+		return
+	}
+	a.pendingRefreshIssueID = ""
+}
+
+// runQueuedIssuesRefresh triggers any queued refresh after a fetch completes.
+func (a *App) runQueuedIssuesRefresh() {
+	if !a.pendingRefresh {
+		return
+	}
+	issueID := a.pendingRefreshIssueID
+	a.pendingRefresh = false
+	a.pendingRefreshIssueID = ""
+	if issueID != "" {
+		go a.refreshIssues(issueID)
+		return
+	}
+	go a.refreshIssues()
+}
+
 // refreshIssues fetches issues from the API and updates the UI.
 // If issueID is provided, that issue will be selected after refresh.
 func (a *App) refreshIssues(issueID ...string) {
 	if a.isLoading {
+		a.queueIssuesRefresh(issueID...)
 		return
 	}
 	a.isLoading = true
@@ -742,13 +770,14 @@ func (a *App) refreshIssues(issueID ...string) {
 			if err != nil {
 				logger.ErrorWithErr(err, "Failed to fetch issues")
 				a.updateStatusBarWithError(err)
-				return
+			} else {
+				logger.Debug("Fetched %d issues", len(issues))
+				a.updateIssuesData(issues, targetIssueID)
+				// Ensure focus is on issues table after refresh
+				a.focusedPane = FocusIssues
+				a.updateFocus()
 			}
-			logger.Debug("Fetched %d issues", len(issues))
-			a.updateIssuesData(issues, targetIssueID)
-			// Ensure focus is on issues table after refresh
-			a.focusedPane = FocusIssues
-			a.updateFocus()
+			a.runQueuedIssuesRefresh()
 		})
 	}()
 
