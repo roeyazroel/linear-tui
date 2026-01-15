@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -676,6 +677,7 @@ func (a *App) openPalette() {
 // openSearchPalette opens the palette in search mode.
 func (a *App) openSearchPalette() {
 	a.paletteCtrl.SetSearchMode(true)
+	a.paletteCtrl.SetQuery(a.searchQuery)
 	a.paletteInput.SetText(a.searchQuery)
 	a.paletteInput.SetLabel("/ ")
 	a.paletteList.Clear()
@@ -976,7 +978,8 @@ func (a *App) onNavigationSelected(node *NavigationNode) {
 
 // setSearchQuery sets the search query and refreshes issues.
 func (a *App) setSearchQuery(query string) {
-	a.searchQuery = query
+	trimmedQuery := strings.TrimSpace(query)
+	a.searchQuery = trimmedQuery
 	// Set focus to issues pane when searching
 	a.focusedPane = FocusIssues
 	a.updateFocus()
