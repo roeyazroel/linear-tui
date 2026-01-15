@@ -43,8 +43,8 @@ flowchart TD
 - [x] Add pagination-aware tests in `internal/linearapi/client_test.go`.
 - [x] Implement cursor pagination in `FetchIssues` and progress callbacks.
 - [x] Update `App.refreshIssues` to show per-page progress.
+- [x] Run `go test ./...`.
 ### In Progress
-- [ ] Run `go test ./...`.
 ### Future
 - [ ] Evaluate pagination latency in large workspaces.
 
