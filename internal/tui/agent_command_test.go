@@ -26,7 +26,14 @@ func TestAskAgentCommand_ShowsModalsAndStreams(t *testing.T) {
 		AgentModel:    "gpt-5.2",
 	}
 	app := NewApp(&linearapi.Client{}, cfg, nil)
-	app.queueUpdateDraw = func(f func()) { f() }
+
+	// Use a mutex to synchronize access to pages and other shared state
+	var pagesMu sync.Mutex
+	app.queueUpdateDraw = func(f func()) {
+		pagesMu.Lock()
+		f()
+		pagesMu.Unlock()
+	}
 
 	selectedIssue := linearapi.Issue{ID: "issue-1", Title: "Test"}
 	app.issuesMu.Lock()
@@ -51,7 +58,8 @@ func TestAskAgentCommand_ShowsModalsAndStreams(t *testing.T) {
 
 	workspaceDir := t.TempDir()
 	var capturedArgs []string
-	var capturedCmd *exec.Cmd
+	var capturedCmdDir string
+	var cmdReady bool
 	var captureMu sync.Mutex
 
 	app.agentRunner = &agents.Runner{
@@ -68,9 +76,13 @@ func TestAskAgentCommand_ShowsModalsAndStreams(t *testing.T) {
 				"AGENT_TUI_HELPER=1",
 				"AGENT_TUI_MODE=success",
 			)
+			// Set the Dir here since the runner will set it after this returns
+			// but we need to capture it for the test
+			cmd.Dir = workspaceDir
 
 			captureMu.Lock()
-			capturedCmd = cmd
+			capturedCmdDir = cmd.Dir
+			cmdReady = true
 			captureMu.Unlock()
 			return cmd
 		},
@@ -81,32 +93,39 @@ func TestAskAgentCommand_ShowsModalsAndStreams(t *testing.T) {
 		t.Fatal("ask_agent command not found")
 	}
 
+	pagesMu.Lock()
 	command.Run(app)
-	if !app.pages.HasPage("agent_prompt") {
+	hasPrompt := app.pages.HasPage("agent_prompt")
+	pagesMu.Unlock()
+	if !hasPrompt {
 		t.Fatal("expected agent prompt modal to be visible")
 	}
 
+	pagesMu.Lock()
 	app.agentPromptModal.promptField.SetText("Summarize", true)
 	app.agentPromptModal.workspaceField.SetText(workspaceDir)
 	app.agentPromptModal.HandleKey(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModCtrl))
+	pagesMu.Unlock()
 
 	waitForCondition(t, time.Second, func() bool {
+		pagesMu.Lock()
+		defer pagesMu.Unlock()
 		return app.pages.HasPage("agent_output")
 	})
 
 	waitForCondition(t, time.Second, func() bool {
 		captureMu.Lock()
 		defer captureMu.Unlock()
-		return capturedCmd != nil && capturedCmd.Dir == workspaceDir
+		return cmdReady && capturedCmdDir == workspaceDir
 	})
 
 	captureMu.Lock()
 	gotArgs := append([]string(nil), capturedArgs...)
-	gotCmd := capturedCmd
+	gotCmdDir := capturedCmdDir
 	captureMu.Unlock()
 
-	if gotCmd.Dir != workspaceDir {
-		t.Fatalf("agent cmd dir = %q, want %q", gotCmd.Dir, workspaceDir)
+	if gotCmdDir != workspaceDir {
+		t.Fatalf("agent cmd dir = %q, want %q", gotCmdDir, workspaceDir)
 	}
 
 	joined := strings.Join(gotArgs, " ")

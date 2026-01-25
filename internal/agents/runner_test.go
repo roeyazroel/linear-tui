@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -18,19 +19,26 @@ func TestRunner_RunStreamsOutput(t *testing.T) {
 
 	provider := testProvider{binary: "helper"}
 	var lines []string
+	var linesMu sync.Mutex
 
 	err := runner.Run(context.Background(), provider, "prompt", "context", AgentRunOptions{}, func(AgentEvent) {}, func(line string) {
+		linesMu.Lock()
 		lines = append(lines, line)
+		linesMu.Unlock()
 	}, func(error) {})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
 
-	if !containsLine(lines, "hello") {
-		t.Fatalf("expected stdout line, got: %#v", lines)
+	linesMu.Lock()
+	linesCopy := append([]string(nil), lines...)
+	linesMu.Unlock()
+
+	if !containsLine(linesCopy, "hello") {
+		t.Fatalf("expected stdout line, got: %#v", linesCopy)
 	}
-	if !containsLine(lines, "stderr: warn") {
-		t.Fatalf("expected stderr line, got: %#v", lines)
+	if !containsLine(linesCopy, "stderr: warn") {
+		t.Fatalf("expected stderr line, got: %#v", linesCopy)
 	}
 }
 
