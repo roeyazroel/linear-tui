@@ -12,7 +12,7 @@ A terminal user interface (TUI) for Linear built with Go and tview.
 
 ## Demo
 
-<video src="docs/agent-demo.mp4" controls width="100%"></video>
+![Agent demo](docs/agent-demo.gif)
 
 ## Features
 
