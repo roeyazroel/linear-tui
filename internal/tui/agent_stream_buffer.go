@@ -157,14 +157,6 @@ func isSpaceByte(value byte) bool {
 	}
 }
 
-// formatSystemLine returns a compact system line.
-func formatSystemLine(event agents.AgentEvent) string {
-	if event.Model != "" {
-		return fmt.Sprintf("System init model=%s", event.Model)
-	}
-	return "System init"
-}
-
 // formatToolLine returns a tool call line suitable for the stream view.
 func formatToolLine(event agents.AgentEvent) string {
 	if event.Tool == nil || event.Tool.Name == "" {
@@ -187,20 +179,4 @@ func formatToolLine(event agents.AgentEvent) string {
 		return fmt.Sprintf("%s: %s %s", label, event.Tool.Name, event.Tool.Summary)
 	}
 	return fmt.Sprintf("%s: %s", label, event.Tool.Name)
-}
-
-// formatResultLine returns a summary result line for the stream view.
-func formatResultLine(event agents.AgentEvent) string {
-	subtype := event.Subtype
-	if subtype == "" {
-		subtype = "completed"
-	}
-	parts := []string{fmt.Sprintf("Result %s", subtype)}
-	if event.IsError {
-		parts = append(parts, "error=true")
-	}
-	if event.DurationMs > 0 {
-		parts = append(parts, fmt.Sprintf("duration=%dms", event.DurationMs))
-	}
-	return strings.Join(parts, " ")
 }

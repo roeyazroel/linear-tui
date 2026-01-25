@@ -94,12 +94,12 @@ type App struct {
 	workflowStates []linearapi.WorkflowState
 
 	// Loading state
-	isLoading             bool
-	pendingRefresh        bool
-	pendingRefreshIssueID string
+	isLoading                      bool
+	pendingRefresh                 bool
+	pendingRefreshIssueID          string
 	pendingRefreshAllowFocusChange bool
-	pickerActive          bool
-	refreshGeneration     atomic.Int64
+	pickerActive                   bool
+	refreshGeneration              atomic.Int64
 
 	// Lazy loading helpers (overridable in tests)
 	fetchIssuesPage func(context.Context, linearapi.FetchIssuesParams, *string) (linearapi.IssuePage, error)
@@ -1127,12 +1127,6 @@ func (a *App) updateAllPaneTitles() {
 	}
 }
 
-// updateIssuesTableTitles updates the table titles with visual indicators for the active section.
-// Deprecated: Use updateAllPaneTitles() instead.
-func (a *App) updateIssuesTableTitles() {
-	a.updateAllPaneTitles()
-}
-
 // openPalette opens the command palette overlay.
 func (a *App) openPalette() {
 	a.paletteCtrl.Reset()
@@ -1241,12 +1235,13 @@ func (a *App) refreshIssuesWithFocusChange(allowFocusChange bool, issueID ...str
 
 		// Apply team/project/state filter based on navigation selection
 		if a.selectedNavigation != nil {
-			if a.selectedNavigation.IsStatus {
+			switch {
+			case a.selectedNavigation.IsStatus:
 				params.TeamID = a.selectedNavigation.TeamID
 				params.StateID = a.selectedNavigation.StateID
-			} else if a.selectedNavigation.IsTeam {
+			case a.selectedNavigation.IsTeam:
 				params.TeamID = a.selectedNavigation.TeamID
-			} else if a.selectedNavigation.IsProject {
+			case a.selectedNavigation.IsProject:
 				params.TeamID = a.selectedNavigation.TeamID
 				params.ProjectID = a.selectedNavigation.ID
 			}
@@ -1809,34 +1804,53 @@ func (a *App) QueueUpdateDraw(f func()) {
 	a.app.QueueUpdateDraw(f)
 }
 
+// loadPickerData loads picker data asynchronously if not already cached.
+func (a *App) loadPickerData(
+	resourceName string,
+	hasData func() bool,
+	loadData func(ctx context.Context, teamID string) error,
+	onLoaded func(),
+) {
+	teamID := a.GetSelectedTeamID()
+	if teamID == "" {
+		logger.Warning("tui.app: cannot show %s picker, no team selected", resourceName)
+		return
+	}
+	go func() {
+		logger.Debug("tui.app: loading %s team_id=%s", resourceName, teamID)
+		ctx := context.Background()
+		if err := loadData(ctx, teamID); err != nil {
+			logger.ErrorWithErr(err, "tui.app: failed to load %s team_id=%s", resourceName, teamID)
+			a.QueueUpdateDraw(func() {
+				a.updateStatusBarWithError(err)
+			})
+			return
+		}
+		logger.Debug("tui.app: loaded %s team_id=%s", resourceName, teamID)
+		a.QueueUpdateDraw(onLoaded)
+	}()
+}
+
 // ShowStatusPicker shows a picker for workflow states.
 func (a *App) ShowStatusPicker(onSelect func(stateID string)) {
 	logger.Debug("tui.app: showing status picker")
 	states := a.workflowStates
 	if len(states) == 0 {
-		// Try to load states for current team
-		teamID := a.GetSelectedTeamID()
-		if teamID == "" {
-			logger.Warning("tui.app: cannot show status picker, no team selected")
-			return
-		}
-		go func() {
-			logger.Debug("tui.app: loading workflow states team_id=%s", teamID)
-			ctx := context.Background()
-			loadedStates, err := a.cache.GetWorkflowStates(ctx, teamID)
-			if err != nil {
-				logger.ErrorWithErr(err, "tui.app: failed to load workflow states team_id=%s", teamID)
-				a.QueueUpdateDraw(func() {
-					a.updateStatusBarWithError(err)
-				})
-				return
-			}
-			logger.Debug("tui.app: loaded workflow states team_id=%s count=%d", teamID, len(loadedStates))
-			a.QueueUpdateDraw(func() {
+		a.loadPickerData(
+			"workflow states",
+			func() bool { return len(a.workflowStates) > 0 },
+			func(ctx context.Context, teamID string) error {
+				loadedStates, err := a.cache.GetWorkflowStates(ctx, teamID)
+				if err != nil {
+					return err
+				}
 				a.workflowStates = loadedStates
-				a.showStatusPickerWithStates(loadedStates, onSelect)
-			})
-		}()
+				return nil
+			},
+			func() {
+				a.showStatusPickerWithStates(a.workflowStates, onSelect)
+			},
+		)
 		return
 	}
 	a.showStatusPickerWithStates(states, onSelect)
@@ -1863,29 +1877,21 @@ func (a *App) ShowUserPicker(onSelect func(userID string)) {
 	logger.Debug("tui.app: showing user picker")
 	users := a.teamUsers
 	if len(users) == 0 {
-		// Try to load users for current team
-		teamID := a.GetSelectedTeamID()
-		if teamID == "" {
-			logger.Warning("tui.app: cannot show user picker, no team selected")
-			return
-		}
-		go func() {
-			logger.Debug("tui.app: loading users for picker team_id=%s", teamID)
-			ctx := context.Background()
-			loadedUsers, err := a.cache.GetUsers(ctx, teamID)
-			if err != nil {
-				logger.ErrorWithErr(err, "tui.app: failed to load users for picker team_id=%s", teamID)
-				a.QueueUpdateDraw(func() {
-					a.updateStatusBarWithError(err)
-				})
-				return
-			}
-			logger.Debug("tui.app: loaded users for picker team_id=%s count=%d", teamID, len(loadedUsers))
-			a.QueueUpdateDraw(func() {
+		a.loadPickerData(
+			"users for picker",
+			func() bool { return len(a.teamUsers) > 0 },
+			func(ctx context.Context, teamID string) error {
+				loadedUsers, err := a.cache.GetUsers(ctx, teamID)
+				if err != nil {
+					return err
+				}
 				a.teamUsers = loadedUsers
-				a.showUserPickerWithUsers(loadedUsers, onSelect)
-			})
-		}()
+				return nil
+			},
+			func() {
+				a.showUserPickerWithUsers(a.teamUsers, onSelect)
+			},
+		)
 		return
 	}
 	a.showUserPickerWithUsers(users, onSelect)

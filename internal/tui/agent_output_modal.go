@@ -338,13 +338,6 @@ func (om *AgentOutputModal) setStatusText(text string) {
 	})
 }
 
-// enqueueLines stores stream lines to be flushed by the ticker.
-func (om *AgentOutputModal) enqueueLines(lines []StreamLine) {
-	om.streamMu.Lock()
-	om.pending = append(om.pending, lines...)
-	om.streamMu.Unlock()
-}
-
 // startFlushTicker begins periodic flushing of stream lines and status.
 func (om *AgentOutputModal) startFlushTicker() {
 	if om.flushTicker != nil {

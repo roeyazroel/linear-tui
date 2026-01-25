@@ -35,6 +35,102 @@ type CommandContext struct {
 	SelectedIssue *linearapi.Issue
 }
 
+// handleAskAgent handles the ask agent command.
+func handleAskAgent(a *App) {
+	issue := a.GetSelectedIssue()
+	if issue == nil {
+		a.updateStatusBarWithError(fmt.Errorf("no issue selected"))
+		return
+	}
+
+	if a.agentPromptModal == nil {
+		a.agentPromptModal = NewAgentPromptModal(a)
+	}
+	if a.agentOutputModal == nil {
+		a.agentOutputModal = NewAgentOutputModal(a)
+	}
+	if a.agentRunner == nil {
+		a.agentRunner = agents.NewRunner()
+	}
+
+	issueID := issue.ID
+	a.agentPromptModal.Show(func(prompt string, workspace string) {
+		prompt = strings.TrimSpace(prompt)
+		if prompt == "" {
+			return
+		}
+		workspace = strings.TrimSpace(workspace)
+
+		go func() {
+			fetchIssue := a.fetchIssueByID
+			if fetchIssue == nil {
+				fetchIssue = a.api.FetchIssueByID
+			}
+
+			fullIssue, err := fetchIssue(context.Background(), issueID)
+			if err != nil {
+				logger.ErrorWithErr(err, "tui.commands: failed to fetch issue for agent issue_id=%s", issueID)
+				a.QueueUpdateDraw(func() {
+					a.updateStatusBarWithError(err)
+				})
+				return
+			}
+
+			issueContext := agents.BuildIssueContext(fullIssue)
+			runner := a.agentRunner
+
+			selected, err := agents.ProviderForKey(a.config.AgentProvider, runner.LookPath)
+			if err != nil {
+				logger.Error("tui.commands: invalid agent provider provider=%s", a.config.AgentProvider)
+				a.QueueUpdateDraw(func() {
+					a.updateStatusBarWithError(err)
+				})
+				return
+			}
+
+			if _, ok := selected.ResolveBinary(); !ok {
+				logger.Error("tui.commands: agent binary not found provider=%s", selected.Name())
+				a.QueueUpdateDraw(func() {
+					a.updateStatusBarWithError(fmt.Errorf("agent binary not found for %s", selected.Name()))
+				})
+				return
+			}
+
+			options := agents.AgentRunOptions{
+				Workspace: workspace,
+				Model:     strings.TrimSpace(a.config.AgentModel),
+				Sandbox:   strings.TrimSpace(a.config.AgentSandbox),
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			a.QueueUpdateDraw(func() {
+				title := fmt.Sprintf(" %s Output ", selected.Name())
+				a.agentOutputModal.Show(title, cancel)
+				a.agentOutputModal.AppendLine(fmt.Sprintf("Starting %s agent run...", selected.Name()))
+			})
+
+			runErr := runner.Run(ctx, selected, prompt, issueContext, options, func(event agents.AgentEvent) {
+				a.agentOutputModal.AppendEvent(event)
+			}, func(line string) {
+				a.agentOutputModal.AppendRawLine(line)
+			}, func(runErr error) {
+				a.agentOutputModal.AppendLine(fmt.Sprintf("error: %v", runErr))
+			})
+
+			a.agentOutputModal.StopSpinner()
+
+			if runErr != nil {
+				a.QueueUpdateDraw(func() {
+					a.agentOutputModal.AppendLine(fmt.Sprintf("error: %v", runErr))
+				})
+				return
+			}
+
+			a.agentOutputModal.AppendLine("Agent run completed.")
+		}()
+	})
+}
+
 // DefaultCommands returns the default set of commands for the palette.
 func DefaultCommands(app *App) []Command {
 	lookPath := exec.LookPath
@@ -157,100 +253,7 @@ func DefaultCommands(app *App) []Command {
 			ID:       "ask_agent",
 			Title:    "Ask agent about selected issue",
 			Keywords: []string{"agent", "ai", "claude", "cursor", "assistant"},
-			Run: func(a *App) {
-				issue := a.GetSelectedIssue()
-				if issue == nil {
-					a.updateStatusBarWithError(fmt.Errorf("no issue selected"))
-					return
-				}
-
-				if a.agentPromptModal == nil {
-					a.agentPromptModal = NewAgentPromptModal(a)
-				}
-				if a.agentOutputModal == nil {
-					a.agentOutputModal = NewAgentOutputModal(a)
-				}
-				if a.agentRunner == nil {
-					a.agentRunner = agents.NewRunner()
-				}
-
-				issueID := issue.ID
-				a.agentPromptModal.Show(func(prompt string, workspace string) {
-					prompt = strings.TrimSpace(prompt)
-					if prompt == "" {
-						return
-					}
-					workspace = strings.TrimSpace(workspace)
-
-					go func() {
-						fetchIssue := a.fetchIssueByID
-						if fetchIssue == nil {
-							fetchIssue = a.api.FetchIssueByID
-						}
-
-						fullIssue, err := fetchIssue(context.Background(), issueID)
-						if err != nil {
-							logger.ErrorWithErr(err, "tui.commands: failed to fetch issue for agent issue_id=%s", issueID)
-							a.QueueUpdateDraw(func() {
-								a.updateStatusBarWithError(err)
-							})
-							return
-						}
-
-						issueContext := agents.BuildIssueContext(fullIssue)
-						runner := a.agentRunner
-
-						selected, err := agents.ProviderForKey(a.config.AgentProvider, runner.LookPath)
-						if err != nil {
-							logger.Error("tui.commands: invalid agent provider provider=%s", a.config.AgentProvider)
-							a.QueueUpdateDraw(func() {
-								a.updateStatusBarWithError(err)
-							})
-							return
-						}
-
-						if _, ok := selected.ResolveBinary(); !ok {
-							logger.Error("tui.commands: agent binary not found provider=%s", selected.Name())
-							a.QueueUpdateDraw(func() {
-								a.updateStatusBarWithError(fmt.Errorf("agent binary not found for %s", selected.Name()))
-							})
-							return
-						}
-
-						options := agents.AgentRunOptions{
-							Workspace: workspace,
-							Model:     strings.TrimSpace(a.config.AgentModel),
-							Sandbox:   strings.TrimSpace(a.config.AgentSandbox),
-						}
-
-						ctx, cancel := context.WithCancel(context.Background())
-						a.QueueUpdateDraw(func() {
-							title := fmt.Sprintf(" %s Output ", selected.Name())
-							a.agentOutputModal.Show(title, cancel)
-							a.agentOutputModal.AppendLine(fmt.Sprintf("Starting %s agent run...", selected.Name()))
-						})
-
-						runErr := runner.Run(ctx, selected, prompt, issueContext, options, func(event agents.AgentEvent) {
-							a.agentOutputModal.AppendEvent(event)
-						}, func(line string) {
-							a.agentOutputModal.AppendRawLine(line)
-						}, func(runErr error) {
-							a.agentOutputModal.AppendLine(fmt.Sprintf("error: %v", runErr))
-						})
-
-						a.agentOutputModal.StopSpinner()
-
-						if runErr != nil {
-							a.QueueUpdateDraw(func() {
-								a.agentOutputModal.AppendLine(fmt.Sprintf("error: %v", runErr))
-							})
-							return
-						}
-
-						a.agentOutputModal.AppendLine("Agent run completed.")
-					}()
-				})
-			},
+			Run:      handleAskAgent,
 		},
 		{
 			ID:           "assign_me",

@@ -72,7 +72,7 @@ type cursorStreamEvent struct {
 	Subtype        string `json:"subtype"`
 	Text           string `json:"text"`
 	Content        string `json:"content"`
-	ApiKeySource   string `json:"apiKeySource"`
+	APIKeySource   string `json:"apiKeySource"`
 	Cwd            string `json:"cwd"`
 	SessionID      string `json:"session_id"`
 	Model          string `json:"model"`
