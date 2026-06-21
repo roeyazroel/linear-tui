@@ -5,38 +5,60 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/glamour/styles"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/roeyazroel/linear-tui/internal/linearapi"
 )
 
-// markdownRenderer is a shared glamour renderer for markdown content.
-var markdownRenderer *glamour.TermRenderer
+// defaultMarkdownWidth is used when a target view's width is not yet known.
+const defaultMarkdownWidth = 80
 
-// initMarkdownRenderer initializes the glamour markdown renderer.
-func initMarkdownRenderer() {
-	var err error
-	markdownRenderer, err = glamour.NewTermRenderer(
-		glamour.WithStylePath("dark"),
-		glamour.WithWordWrap(80),
+// minMarkdownWidth guards against rendering into an unusably narrow column.
+const minMarkdownWidth = 20
+
+// markdownRenderers caches one glamour renderer per word-wrap width. Renderers
+// are relatively expensive to construct, and the details panes only re-render
+// on selection, so caching by width avoids rebuilding on every update.
+var markdownRenderers = make(map[int]*glamour.TermRenderer)
+
+func uintPtr(v uint) *uint { return &v }
+
+// markdownRendererForWidth returns a renderer that word-wraps at the given
+// width. It uses the dark style but with the document margin removed so that
+// rendered lines begin at column 0 — the surrounding TextView already supplies
+// its own border padding, and the default 2-column margin caused every line
+// (including wrapped continuations) to be indented inconsistently.
+func markdownRendererForWidth(width int) *glamour.TermRenderer {
+	if width < minMarkdownWidth {
+		width = minMarkdownWidth
+	}
+	if r, ok := markdownRenderers[width]; ok {
+		return r
+	}
+
+	style := styles.DarkStyleConfig
+	style.Document.Margin = uintPtr(0)
+
+	r, err := glamour.NewTermRenderer(
+		glamour.WithStyles(style),
+		glamour.WithWordWrap(width),
 	)
 	if err != nil {
-		// Fallback: create a basic renderer if custom style fails
-		markdownRenderer, _ = glamour.NewTermRenderer(
+		// Fallback: a basic auto-styled renderer if the custom style fails.
+		r, _ = glamour.NewTermRenderer(
 			glamour.WithAutoStyle(),
-			glamour.WithWordWrap(80),
+			glamour.WithWordWrap(width),
 		)
 	}
+	markdownRenderers[width] = r
+	return r
 }
 
-// renderMarkdown renders markdown content using glamour.
-// Falls back to plain text if rendering fails.
-func renderMarkdown(content string) string {
-	if markdownRenderer == nil {
-		initMarkdownRenderer()
-	}
-
-	rendered, err := markdownRenderer.Render(content)
+// renderMarkdownWidth renders markdown content, word-wrapped to width columns.
+// Falls back to the raw content if rendering fails.
+func renderMarkdownWidth(content string, width int) string {
+	rendered, err := markdownRendererForWidth(width).Render(content)
 	if err != nil {
 		// Fallback to plain text on error
 		return content
@@ -44,6 +66,26 @@ func renderMarkdown(content string) string {
 
 	// Trim extra whitespace that glamour may add
 	return strings.TrimSpace(rendered)
+}
+
+// renderMarkdown renders markdown at a default width, for callers without a
+// concrete target width.
+func renderMarkdown(content string) string {
+	return renderMarkdownWidth(content, defaultMarkdownWidth)
+}
+
+// textViewInnerWidth returns the usable text width of a TextView (excluding its
+// border and padding), or defaultMarkdownWidth if the view has not been laid
+// out yet.
+func textViewInnerWidth(tv *tview.TextView) int {
+	if tv == nil {
+		return defaultMarkdownWidth
+	}
+	_, _, w, _ := tv.GetInnerRect()
+	if w <= 0 {
+		return defaultMarkdownWidth
+	}
+	return w
 }
 
 func formatIssueReference(ref linearapi.IssueRef) string {
@@ -272,9 +314,11 @@ func (a *App) updateDetailsView() {
 	if issue.Description != "" {
 		_, _ = fmt.Fprintf(writer, "%sDescription:[-]\n\n", keyColor)
 
-		// Render description as markdown and write through ANSIWriter
-		// ANSIWriter translates ANSI escape codes to tview color tags
-		renderedDesc := renderMarkdown(issue.Description)
+		// Render description as markdown and write through ANSIWriter.
+		// ANSIWriter translates ANSI escape codes to tview color tags.
+		// Wrap to the pane's actual width so glamour does not pre-wrap wider
+		// than the column (which left tview to re-wrap into ragged lines).
+		renderedDesc := renderMarkdownWidth(issue.Description, textViewInnerWidth(a.detailsDescriptionView))
 		_, _ = fmt.Fprint(writer, renderedDesc)
 	} else {
 		_, _ = fmt.Fprintf(writer, "%sNo description available[-]", keyColor)
@@ -308,8 +352,8 @@ func (a *App) updateDetailsView() {
 			_, _ = fmt.Fprintf(commentsWriter, "%s%s[-] %s%s[-]\n", accentColor, authorDisplay, keyColor, timeStr)
 			_, _ = fmt.Fprint(commentsWriter, "\n")
 
-			// Render comment body as markdown
-			renderedComment := renderMarkdown(comment.Body)
+			// Render comment body as markdown, wrapped to the comments pane width.
+			renderedComment := renderMarkdownWidth(comment.Body, textViewInnerWidth(a.detailsCommentsView))
 			_, _ = fmt.Fprint(commentsWriter, renderedComment)
 
 			// Add separator between comments (but not after the last one)
