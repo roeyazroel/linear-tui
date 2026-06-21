@@ -1138,13 +1138,16 @@ func (a *App) handlePaletteKey(event *tcell.EventKey) *tcell.EventKey {
 			return nil
 		}
 		return nil
-	case tcell.KeyUp:
+	case tcell.KeyUp, tcell.KeyCtrlK, tcell.KeyCtrlP:
+		// Ctrl-k / Ctrl-p mirror vim-style up navigation (plain k/p type into
+		// the filter, so a modifier is required).
 		if !a.paletteCtrl.IsSearchMode() {
 			a.paletteCtrl.MoveCursorUp()
 			a.updatePaletteList()
 		}
 		return nil
-	case tcell.KeyDown:
+	case tcell.KeyDown, tcell.KeyCtrlJ, tcell.KeyCtrlN:
+		// Ctrl-j / Ctrl-n mirror vim-style down navigation.
 		if !a.paletteCtrl.IsSearchMode() {
 			a.paletteCtrl.MoveCursorDown()
 			a.updatePaletteList()

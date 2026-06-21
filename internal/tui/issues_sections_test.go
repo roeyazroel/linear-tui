@@ -77,37 +77,37 @@ func TestSplitIssuesByAssignee(t *testing.T) {
 			wantOtherCount: 0,
 		},
 		{
-			name: "children follow parent section - parent in my, children unassigned",
+			name: "split by own assignee - parent mine, children unassigned",
 			issues: []linearapi.Issue{
 				{ID: "parent-1", AssigneeID: currentUserID},
 				{ID: "child-1", AssigneeID: "", Parent: &linearapi.IssueRef{ID: "parent-1"}},
 				{ID: "child-2", AssigneeID: "", Parent: &linearapi.IssueRef{ID: "parent-1"}},
 			},
 			currentUserID:  currentUserID,
-			wantMyCount:    3, // Parent + 2 children
-			wantOtherCount: 0,
+			wantMyCount:    1, // Only the parent is assigned to me
+			wantOtherCount: 2, // Unassigned children
 		},
 		{
-			name: "children follow parent section - parent unassigned, children assigned to me",
+			name: "split by own assignee - parent someone else, children assigned to me",
 			issues: []linearapi.Issue{
-				{ID: "parent-2", AssigneeID: ""},
+				{ID: "parent-2", AssigneeID: "user-456"},
 				{ID: "child-3", AssigneeID: currentUserID, Parent: &linearapi.IssueRef{ID: "parent-2"}},
 				{ID: "child-4", AssigneeID: currentUserID, Parent: &linearapi.IssueRef{ID: "parent-2"}},
 			},
 			currentUserID:  currentUserID,
-			wantMyCount:    0,
-			wantOtherCount: 3, // Parent + 2 children
+			wantMyCount:    2, // My sub-issues surface in My Issues
+			wantOtherCount: 1, // The parent belongs to someone else
 		},
 		{
-			name: "nested children follow parent section",
+			name: "split by own assignee - nested, only some mine",
 			issues: []linearapi.Issue{
 				{ID: "parent-3", AssigneeID: currentUserID},
 				{ID: "child-5", AssigneeID: "", Parent: &linearapi.IssueRef{ID: "parent-3"}},
-				{ID: "grandchild-1", AssigneeID: "", Parent: &linearapi.IssueRef{ID: "child-5"}},
+				{ID: "grandchild-1", AssigneeID: currentUserID, Parent: &linearapi.IssueRef{ID: "child-5"}},
 			},
 			currentUserID:  currentUserID,
-			wantMyCount:    3, // Parent + child + grandchild
-			wantOtherCount: 0,
+			wantMyCount:    2, // parent + grandchild (both mine)
+			wantOtherCount: 1, // unassigned child
 		},
 	}
 
@@ -123,44 +123,20 @@ func TestSplitIssuesByAssignee(t *testing.T) {
 				t.Errorf("splitIssuesByAssignee() other count = %d, want %d", len(other), tt.wantOtherCount)
 			}
 
-			// Build a map of issue IDs to their section (true = my, false = other)
-			myIDs := make(map[string]bool)
+			// Verify correctness: every "my" issue is assigned to the current
+			// user, regardless of parent/child relationship.
 			for _, issue := range my {
-				myIDs[issue.ID] = true
-			}
-			otherIDs := make(map[string]bool)
-			for _, issue := range other {
-				otherIDs[issue.ID] = true
-			}
-
-			// Verify correctness: top-level my issues have correct assignee
-			// Children may have different assignees but should follow parent
-			for _, issue := range my {
-				if issue.Parent == nil {
-					// Top-level issue must have correct assignee
-					if issue.AssigneeID != tt.currentUserID {
-						t.Errorf("splitIssuesByAssignee() my top-level issue %s has AssigneeID %s, want %s", issue.ID, issue.AssigneeID, tt.currentUserID)
-					}
-				} else {
-					// Child issue - verify parent is also in "my" section
-					if !myIDs[issue.Parent.ID] {
-						t.Errorf("splitIssuesByAssignee() my child issue %s has parent %s not in my section", issue.ID, issue.Parent.ID)
-					}
+				if issue.AssigneeID != tt.currentUserID {
+					t.Errorf("splitIssuesByAssignee() my issue %s has AssigneeID %s, want %s", issue.ID, issue.AssigneeID, tt.currentUserID)
 				}
 			}
 
-			// Verify correctness: top-level other issues don't have current user as assignee
-			// Children may have current user as assignee but should follow parent
-			for _, issue := range other {
-				if issue.Parent == nil {
-					// Top-level issue must not have current user as assignee
+			// Verify correctness: no "other" issue is assigned to the current user
+			// (only meaningful when a current user is set).
+			if tt.currentUserID != "" {
+				for _, issue := range other {
 					if issue.AssigneeID == tt.currentUserID {
-						t.Errorf("splitIssuesByAssignee() other top-level issue %s has AssigneeID %s, should not match current user", issue.ID, issue.AssigneeID)
-					}
-				} else {
-					// Child issue - verify parent is also in "other" section
-					if !otherIDs[issue.Parent.ID] {
-						t.Errorf("splitIssuesByAssignee() other child issue %s has parent %s not in other section", issue.ID, issue.Parent.ID)
+						t.Errorf("splitIssuesByAssignee() other issue %s is assigned to current user but is in other section", issue.ID)
 					}
 				}
 			}
