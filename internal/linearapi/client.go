@@ -382,8 +382,12 @@ type FetchIssuesParams struct {
 	// ProjectIDs restricts results to issues in any of these projects
 	// (project.id.in). Ignored when ProjectID is set (single-project takes
 	// precedence).
-	ProjectIDs         []string
-	StateID            string
+	ProjectIDs []string
+	StateID    string
+	// ExcludeStateTypes filters out issues whose workflow-state type is in this
+	// list (state.type.nin), e.g. "completed", "canceled", "duplicate". Ignored
+	// when StateID is set (an explicit single-state filter takes precedence).
+	ExcludeStateTypes  []string
 	CycleID            string
 	AssigneeID         string
 	LabelIDs           []string
@@ -1008,6 +1012,8 @@ func buildBaseIssueFilter(params FetchIssuesParams) IssueFilter {
 	}
 	if params.StateID != "" {
 		filter["state"] = map[string]interface{}{"id": map[string]interface{}{"eq": params.StateID}}
+	} else if len(params.ExcludeStateTypes) > 0 {
+		filter["state"] = map[string]interface{}{"type": map[string]interface{}{"nin": params.ExcludeStateTypes}}
 	}
 	if params.CycleID != "" {
 		filter["cycle"] = map[string]interface{}{"id": map[string]interface{}{"eq": params.CycleID}}

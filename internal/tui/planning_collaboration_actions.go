@@ -323,6 +323,22 @@ func (a *App) toggleMyIssuesOnly() {
 	}
 }
 
+// closedStateTypes are the Linear workflow-state types treated as "closed" and
+// hidden by default. A duplicate's canonical target is a separate, non-closed
+// issue, so it remains visible.
+var closedStateTypes = []string{"completed", "canceled", "duplicate"}
+
+// toggleHideClosedIssues switches between hiding and showing closed issues
+// (done/cancelled/duplicate), then refreshes.
+func (a *App) toggleHideClosedIssues() {
+	a.hideClosedIssues = !a.hideClosedIssues
+	if a.hideClosedIssues {
+		a.applyFiltersAndRefresh("Hiding done/cancelled/duplicate issues")
+	} else {
+		a.applyFiltersAndRefresh("Showing all states")
+	}
+}
+
 // showProjectScopePicker scopes the issue list to a single favorite project (or
 // "All Favourite Projects") via a type-to-filter picker. This is the primary
 // navigation control now that the navigation tree is gone.

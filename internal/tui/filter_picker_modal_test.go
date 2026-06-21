@@ -70,58 +70,80 @@ func TestSetProjectScope(t *testing.T) {
 	}
 }
 
-func TestRefreshIssues_DefaultsToMyFavorites(t *testing.T) {
+// captureRefreshParams runs a refresh and returns the params passed to the
+// (stubbed) fetcher.
+func captureRefreshParams(t *testing.T, app *App) linearapi.FetchIssuesParams {
+	t.Helper()
+	called := make(chan linearapi.FetchIssuesParams, 1)
+	app.fetchIssuesPage = func(ctx context.Context, params linearapi.FetchIssuesParams, after *string) (linearapi.IssuePage, error) {
+		select {
+		case called <- params:
+		default:
+		}
+		return linearapi.IssuePage{Issues: []linearapi.Issue{}, HasNext: false}, nil
+	}
+	app.refreshIssues()
+	select {
+	case params := <-called:
+		return params
+	case <-time.After(time.Second):
+		t.Fatal("fetchIssuesPage was not called")
+		return linearapi.FetchIssuesParams{}
+	}
+}
+
+func TestRefreshIssues_DefaultScopeAllAssigneesInFavorites(t *testing.T) {
 	app := newScopeTestApp(t)
 	app.currentUser = &linearapi.User{ID: "me"}
 	app.favoriteProjects = []linearapi.Project{{ID: "p1"}, {ID: "p2"}}
 
-	called := make(chan linearapi.FetchIssuesParams, 1)
-	app.fetchIssuesPage = func(ctx context.Context, params linearapi.FetchIssuesParams, after *string) (linearapi.IssuePage, error) {
-		select {
-		case called <- params:
-		default:
-		}
-		return linearapi.IssuePage{Issues: []linearapi.Issue{}, HasNext: false}, nil
+	params := captureRefreshParams(t, app)
+
+	// Default: all assignees (no assignee filter), scoped to favorite projects.
+	if params.AssigneeID != "" {
+		t.Fatalf("AssigneeID = %q, want empty (all assignees by default)", params.AssigneeID)
 	}
-
-	app.refreshIssues()
-
-	select {
-	case params := <-called:
-		if params.AssigneeID != "me" {
-			t.Fatalf("AssigneeID = %q, want %q", params.AssigneeID, "me")
-		}
-		if len(params.ProjectIDs) != 2 || params.ProjectIDs[0] != "p1" || params.ProjectIDs[1] != "p2" {
-			t.Fatalf("ProjectIDs = %v, want [p1 p2]", params.ProjectIDs)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("fetchIssuesPage was not called")
+	if len(params.ProjectIDs) != 2 || params.ProjectIDs[0] != "p1" || params.ProjectIDs[1] != "p2" {
+		t.Fatalf("ProjectIDs = %v, want [p1 p2]", params.ProjectIDs)
+	}
+	// Default: closed states excluded.
+	if len(params.ExcludeStateTypes) != 3 {
+		t.Fatalf("ExcludeStateTypes = %v, want completed/canceled/duplicate", params.ExcludeStateTypes)
 	}
 }
 
-func TestRefreshIssues_ToggleAllAssignees(t *testing.T) {
+func TestRefreshIssues_MyIssuesToggle(t *testing.T) {
 	app := newScopeTestApp(t)
 	app.currentUser = &linearapi.User{ID: "me"}
+	app.myIssuesOnly = true
 
-	called := make(chan linearapi.FetchIssuesParams, 1)
-	app.fetchIssuesPage = func(ctx context.Context, params linearapi.FetchIssuesParams, after *string) (linearapi.IssuePage, error) {
-		select {
-		case called <- params:
-		default:
-		}
-		return linearapi.IssuePage{Issues: []linearapi.Issue{}, HasNext: false}, nil
+	params := captureRefreshParams(t, app)
+	if params.AssigneeID != "me" {
+		t.Fatalf("AssigneeID = %q, want %q", params.AssigneeID, "me")
 	}
+}
 
-	app.myIssuesOnly = false
-	app.refreshIssues()
+func TestRefreshIssues_ShowClosedToggle(t *testing.T) {
+	app := newScopeTestApp(t)
+	app.hideClosedIssues = false
 
-	select {
-	case params := <-called:
-		if params.AssigneeID != "" {
-			t.Fatalf("AssigneeID = %q, want empty (all assignees)", params.AssigneeID)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("fetchIssuesPage was not called")
+	params := captureRefreshParams(t, app)
+	if len(params.ExcludeStateTypes) != 0 {
+		t.Fatalf("ExcludeStateTypes = %v, want empty when closed issues are shown", params.ExcludeStateTypes)
+	}
+}
+
+func TestRefreshIssues_ExplicitStateDisablesClosedExclusion(t *testing.T) {
+	app := newScopeTestApp(t)
+	// hideClosedIssues defaults true, but an explicit single-state filter wins.
+	app.richFilters.StateID = "state-done"
+
+	params := captureRefreshParams(t, app)
+	if params.StateID != "state-done" {
+		t.Fatalf("StateID = %q, want %q", params.StateID, "state-done")
+	}
+	if len(params.ExcludeStateTypes) != 0 {
+		t.Fatalf("ExcludeStateTypes = %v, want empty when an explicit state filter is set", params.ExcludeStateTypes)
 	}
 }
 

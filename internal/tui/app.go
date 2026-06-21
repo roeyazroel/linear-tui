@@ -219,6 +219,7 @@ type App struct {
 	favoriteProjects      []linearapi.Project // Viewer's favorite projects, loaded at startup
 	selectedProjectTeamID string              // Team of the scoped project, for team-dependent actions
 	myIssuesOnly          bool                // When true, only issues assigned to the current user are fetched
+	hideClosedIssues      bool                // When true, completed/canceled/duplicate issues are excluded server-side
 
 	// Loading state
 	isLoading                      bool
@@ -289,7 +290,8 @@ func NewApp(api *linearapi.Client, cfg config.Config, templates []config.AgentPr
 		otherIDToIssue:       make(map[string]*linearapi.Issue),
 		activeIssuesSection:  IssuesSectionOther, // Default to Other section
 		agentPromptTemplates: templates,
-		myIssuesOnly:         true, // Default to showing only the current user's issues
+		myIssuesOnly:         false, // Default to all assignees (My + Other Issues) within favourite projects
+		hideClosedIssues:     true,  // Default to hiding completed/canceled/duplicate issues
 	}
 
 	app.paletteCtrl = NewPaletteController(DefaultCommands(app))
@@ -1602,6 +1604,13 @@ func (a *App) refreshIssuesWithFocusChange(allowFocusChange bool, issueID ...str
 			}
 		}
 
+		// Hide closed issues (done/cancelled/duplicate) server-side unless an
+		// explicit single-state filter is active. The active duplicate target is
+		// a separate, non-closed issue, so it remains visible.
+		if a.hideClosedIssues && params.StateID == "" {
+			params.ExcludeStateTypes = closedStateTypes
+		}
+
 		fetchPage := a.fetchIssuesPage
 		if fetchPage == nil {
 			fetchPage = a.api.FetchIssuesPage
@@ -2088,9 +2097,15 @@ func (a *App) updateStatusBar() {
 		scopeLabel = a.richFilters.ProjectID
 	}
 	scopeText := fmt.Sprintf("%sProject: %s[-]", a.themeTags.Accent, scopeLabel)
-	// Assignee-scope indicator (only when broadened beyond the current user).
-	if !a.myIssuesOnly {
-		scopeText += fmt.Sprintf(" %sAssignee: all[-]", a.themeTags.Warning)
+	// Assignee-scope indicator (only when narrowed to the current user; the
+	// default is all assignees).
+	if a.myIssuesOnly {
+		scopeText += fmt.Sprintf(" %sMine[-]", a.themeTags.Warning)
+	}
+	// Closed-issues indicator (only when broadened to include closed issues;
+	// the default hides done/cancelled/duplicate).
+	if !a.hideClosedIssues {
+		scopeText += fmt.Sprintf(" %s+closed[-]", a.themeTags.Warning)
 	}
 
 	searchText := ""

@@ -429,6 +429,14 @@ func DefaultCommands(app *App) []Command {
 			},
 		},
 		{
+			ID:       "toggle_closed_issues",
+			Title:    "Toggle closed issues (done/cancelled/duplicate)",
+			Keywords: []string{"closed", "done", "cancelled", "canceled", "duplicate", "hide", "show", "state", "toggle"},
+			Run: func(a *App) {
+				a.toggleHideClosedIssues()
+			},
+		},
+		{
 			ID:       "filter_project",
 			Title:    "Filter by project",
 			Keywords: []string{"filter", "project"},
