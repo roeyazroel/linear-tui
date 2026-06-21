@@ -646,6 +646,71 @@ func (c *Client) ListProjects(ctx context.Context, teamID string) ([]Project, er
 	return projects, nil
 }
 
+// ListAllProjects fetches every project accessible to the viewer across all
+// teams, paginating through the workspace-level projects connection. A project
+// can belong to multiple teams; TeamID is set to its first team so that
+// team-scoped actions have a sensible default context.
+func (c *Client) ListAllProjects(ctx context.Context) ([]Project, error) {
+	var after *string
+	projects := make([]Project, 0)
+
+	for {
+		var query struct {
+			Projects struct {
+				Nodes []struct {
+					ID    graphql.String
+					Name  graphql.String
+					Teams struct {
+						Nodes []struct {
+							ID graphql.String
+						}
+					} `graphql:"teams(first: 1)"`
+				}
+				PageInfo struct {
+					HasNextPage graphql.Boolean
+					EndCursor   graphql.String
+				}
+			} `graphql:"projects(first: $first, after: $after)"`
+		}
+
+		var afterCursor *graphql.String
+		if after != nil {
+			cursor := graphql.String(*after)
+			afterCursor = &cursor
+		}
+
+		variables := map[string]interface{}{
+			"first": graphql.Int(50),
+			"after": afterCursor,
+		}
+
+		if err := c.client.Query(ctx, &query, variables); err != nil {
+			logger.ErrorWithErr(err, "linearapi.client: ListAllProjects failed")
+			return nil, fmt.Errorf("list all projects: %w", err)
+		}
+
+		for _, node := range query.Projects.Nodes {
+			teamID := ""
+			if len(node.Teams.Nodes) > 0 {
+				teamID = string(node.Teams.Nodes[0].ID)
+			}
+			projects = append(projects, Project{
+				ID:     string(node.ID),
+				Name:   string(node.Name),
+				TeamID: teamID,
+			})
+		}
+
+		if !bool(query.Projects.PageInfo.HasNextPage) {
+			break
+		}
+		cursor := string(query.Projects.PageInfo.EndCursor)
+		after = &cursor
+	}
+
+	return projects, nil
+}
+
 // ListProjectMilestones fetches all non-archived milestones for a project.
 func (c *Client) ListProjectMilestones(ctx context.Context, projectID string) ([]ProjectMilestone, error) {
 	var after *string

@@ -293,43 +293,81 @@ func (a *App) showStatusFilter() {
 	})
 }
 
+// showProjectFilter is an alias for the project scope picker, kept so the
+// "Filter by project" palette entry and the filter-issues sub-picker route to
+// the same cross-team, type-to-filter project picker.
 func (a *App) showProjectFilter() {
-	projects := a.teamProjects
-	if len(projects) == 0 {
-		teamID := a.GetSelectedTeamID()
-		if teamID == "" {
-			a.updateStatusBarWithError(fmt.Errorf("team context is required"))
-			return
-		}
-		go func() {
-			loadedProjects, err := a.cache.GetProjects(context.Background(), teamID)
-			a.QueueUpdateDraw(func() {
-				if err != nil {
-					a.updateStatusBarWithError(err)
-					return
-				}
-				a.teamProjects = loadedProjects
-				a.showProjectFilterWithProjects(loadedProjects)
-			})
-		}()
-		return
-	}
-	a.showProjectFilterWithProjects(projects)
+	a.showProjectScopePicker()
 }
 
-func (a *App) showProjectFilterWithProjects(projects []linearapi.Project) {
-	items := make([]PickerItem, 0, len(projects))
+// showProjectScopePicker scopes the issue list to a single project (or "All
+// Projects") via a type-to-filter picker over every project across all teams.
+// This is the primary navigation control now that the navigation tree is gone.
+func (a *App) showProjectScopePicker() {
+	if len(a.allProjects) > 0 {
+		a.presentProjectScopePicker(a.allProjects)
+		return
+	}
+	a.flashStatus("Loading projects...")
+	go func() {
+		projects, err := a.api.ListAllProjects(context.Background())
+		a.QueueUpdateDraw(func() {
+			if err != nil {
+				a.updateStatusBarWithError(err)
+				return
+			}
+			a.allProjects = projects
+			a.presentProjectScopePicker(projects)
+		})
+	}()
+}
+
+func (a *App) presentProjectScopePicker(projects []linearapi.Project) {
+	items := make([]PickerItem, 0, len(projects)+1)
+	items = append(items, PickerItem{ID: "", Label: "All Projects"})
 	projectNames := make(map[string]string, len(projects))
+	projectTeams := make(map[string]string, len(projects))
 	for _, project := range projects {
 		items = append(items, PickerItem{ID: project.ID, Label: project.Name})
 		projectNames[project.ID] = project.Name
+		projectTeams[project.ID] = project.TeamID
 	}
-	a.pickerActive = true
-	a.pickerModal.Show("Filter Project", items, func(item PickerItem) {
-		a.pickerActive = false
-		a.richFilters.ProjectID = item.ID
-		a.richFilters.ProjectName = projectNames[item.ID]
-		a.applyFiltersAndRefresh("Applied project filter")
+	a.filterPickerModal.Show("Select Project", items, func(item PickerItem) {
+		a.setProjectScope(item.ID, projectNames[item.ID], projectTeams[item.ID])
+	})
+}
+
+// setProjectScope applies (or clears, when projectID is empty) the project
+// filter and loads the project's team metadata so team-dependent commands
+// (status, labels, cycle, create-issue) have context.
+func (a *App) setProjectScope(projectID, projectName, teamID string) {
+	a.richFilters.ProjectID = projectID
+	a.richFilters.ProjectName = projectName
+	a.selectedProjectTeamID = teamID
+	if projectID == "" {
+		a.applyFiltersAndRefresh("Showing all projects")
+		return
+	}
+	if teamID != "" && a.loadTeamMetadataFunc != nil {
+		go a.loadTeamMetadataFunc(teamID)
+	}
+	a.applyFiltersAndRefresh(fmt.Sprintf("Scoped to project: %s", projectName))
+}
+
+// loadTeamMetadata loads users, projects, workflow states, and cycles for a team
+// so team-scoped commands and pickers have data to work with.
+func (a *App) loadTeamMetadata(teamID string) {
+	ctx := context.Background()
+	_ = a.cache.PreloadTeamMetadata(ctx, teamID)
+	users, _ := a.cache.GetUsers(ctx, teamID)
+	projects, _ := a.cache.GetProjects(ctx, teamID)
+	states, _ := a.cache.GetWorkflowStates(ctx, teamID)
+	cycles, _ := a.cache.GetCycles(ctx, teamID)
+	a.QueueUpdateDraw(func() {
+		a.teamUsers = users
+		a.teamProjects = projects
+		a.workflowStates = states
+		a.teamCycles = cycles
 	})
 }
 

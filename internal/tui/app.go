@@ -76,13 +76,8 @@ func (f IssueFilters) Summary() string {
 		}
 		parts = append(parts, "status="+label)
 	}
-	if f.ProjectID != "" {
-		label := f.ProjectName
-		if label == "" {
-			label = f.ProjectID
-		}
-		parts = append(parts, "project="+label)
-	}
+	// Project scope is shown separately in the status bar as a persistent
+	// indicator, so it is intentionally omitted from this filter summary.
 	if f.CycleID != "" {
 		label := f.CycleName
 		if label == "" {
@@ -169,6 +164,7 @@ type App struct {
 	paletteModalContent    *tview.Flex
 	paletteCtrl            *PaletteController
 	pickerModal            *PickerModal
+	filterPickerModal      *FilterPickerModal
 	createIssueModal       *CreateIssueModal
 	createCommentModal     *CreateCommentModal
 	editTitleModal         *EditTitleModal
@@ -219,12 +215,17 @@ type App struct {
 	workflowStates []linearapi.WorkflowState
 	teamCycles     []linearapi.Cycle
 
+	// Project scope (bottom-bar project picker)
+	allProjects           []linearapi.Project // All projects across teams, lazily loaded
+	selectedProjectTeamID string              // Team of the scoped project, for team-dependent actions
+
 	// Loading state
 	isLoading                      bool
 	pendingRefresh                 bool
 	pendingRefreshIssueID          string
 	pendingRefreshAllowFocusChange bool
 	pickerActive                   bool
+	filterPickerActive             bool
 	refreshGeneration              atomic.Int64
 
 	// Lazy loading helpers (overridable in tests)
@@ -238,6 +239,7 @@ type App struct {
 	unsubscribeIssueFunc    func(context.Context, string) (linearapi.Issue, error)
 	openURLFunc             func(string) error
 	copyToClipboardFunc     func(string) error
+	loadTeamMetadataFunc    func(teamID string)
 	refreshCompleted        func()
 
 	// UI update mutex (for test safety when queueUpdateDraw executes immediately)
@@ -278,7 +280,7 @@ func NewApp(api *linearapi.Client, cfg config.Config, templates []config.AgentPr
 		themeTags:            NewThemeTags(theme),
 		density:              density,
 		pages:                tview.NewPages(),
-		focusedPane:          FocusNavigation,
+		focusedPane:          FocusIssues,
 		sortField:            SortByUpdatedAt,
 		expandedState:        make(map[string]bool),
 		idToIssue:            make(map[string]*linearapi.Issue),
@@ -298,6 +300,7 @@ func NewApp(api *linearapi.Client, cfg config.Config, templates []config.AgentPr
 	app.unsubscribeIssueFunc = api.UnsubscribeFromIssue
 	app.openURLFunc = openURL
 	app.copyToClipboardFunc = copyToClipboard
+	app.loadTeamMetadataFunc = app.loadTeamMetadata
 	app.queueUpdateDraw = func(f func()) {
 		app.app.QueueUpdateDraw(f)
 	}
@@ -335,10 +338,9 @@ func (a *App) loadInitialData() {
 			logger.Warning("tui.app: failed to load current user error=%v", err)
 		}
 
-		// Fetch teams and build navigation
-		a.loadNavigationData(ctx)
-
-		// Load issues for initial view
+		// Load issues for the initial view. With no project scope selected this
+		// shows issues across all teams ("All Projects"). Project scope is chosen
+		// from the bottom-bar project picker.
 		a.refreshIssues()
 	}()
 }
@@ -466,6 +468,7 @@ func (a *App) rebuildModals() {
 	}
 
 	a.pickerModal = NewPickerModal(a)
+	a.filterPickerModal = NewFilterPickerModal(a)
 	a.createIssueModal = NewCreateIssueModal(a)
 	a.createCommentModal = NewCreateCommentModal(a)
 	a.editTitleModal = NewEditTitleModal(a)
@@ -838,11 +841,12 @@ func (a *App) buildLayout() {
 	a.detailsView = a.buildDetailsView()
 	a.statusBar = a.buildStatusBar()
 
-	// Create horizontal split: navigation (20%) | issues (50%) | details (30%)
+	// Create horizontal split: issues (~60%) | details (~40%).
+	// The navigation tree is intentionally not mounted: project scope is chosen
+	// from the bottom-bar project picker ('P') instead, freeing horizontal space.
 	contentFlex := tview.NewFlex().
-		AddItem(a.navigationTree, 0, 2, true).
-		AddItem(a.issuesColumn, 0, 5, false).
-		AddItem(a.detailsView, 0, 3, false)
+		AddItem(a.issuesColumn, 0, 3, true).
+		AddItem(a.detailsView, 0, 2, false)
 
 	// Create vertical layout: content + status bar
 	a.mainLayout = tview.NewFlex().
@@ -855,6 +859,7 @@ func (a *App) buildLayout() {
 
 	// Build picker and create issue modals
 	a.pickerModal = NewPickerModal(a)
+	a.filterPickerModal = NewFilterPickerModal(a)
 	a.createIssueModal = NewCreateIssueModal(a)
 	a.createCommentModal = NewCreateCommentModal(a)
 	a.editTitleModal = NewEditTitleModal(a)
@@ -886,6 +891,11 @@ func (a *App) bindGlobalKeys() {
 		// Handle picker modal if active
 		if a.pickerActive {
 			return a.pickerModal.HandleKey(event)
+		}
+
+		// Handle filterable picker (e.g. project scope) if active
+		if a.filterPickerActive {
+			return a.filterPickerModal.HandleKey(event)
 		}
 
 		// Check if create issue modal is visible and handle its keys
@@ -1049,8 +1059,7 @@ func (a *App) handleNavigationKey(event *tcell.EventKey) *tcell.EventKey {
 func (a *App) handleIssuesKey(event *tcell.EventKey) *tcell.EventKey {
 	switch event.Key() {
 	case tcell.KeyLeft:
-		a.focusedPane = FocusNavigation
-		a.updateFocus()
+		// Issues is the left-most pane now; nothing to the left.
 		return nil
 	case tcell.KeyRight:
 		a.focusedPane = FocusDetails
@@ -1062,8 +1071,7 @@ func (a *App) handleIssuesKey(event *tcell.EventKey) *tcell.EventKey {
 		// Handle vim-style navigation first
 		switch r {
 		case 'h':
-			a.focusedPane = FocusNavigation
-			a.updateFocus()
+			// Issues is the left-most pane now; nothing to the left.
 			return nil
 		case 'l':
 			a.focusedPane = FocusDetails
@@ -1198,7 +1206,13 @@ func (a *App) cyclePanesForward() {
 			a.focusedDetailsView = false // Start with description
 		}
 	case FocusDetails:
-		a.focusedPane = FocusNavigation
+		// Wrap back to Issues (navigation pane is no longer mounted).
+		a.focusedPane = FocusIssues
+		if len(a.myIssueRows) > 0 {
+			a.activeIssuesSection = IssuesSectionMy
+		} else {
+			a.activeIssuesSection = IssuesSectionOther
+		}
 		// FocusPalette is excluded from cycling
 	}
 	a.updateFocus()
@@ -1219,12 +1233,14 @@ func (a *App) cyclePanesBackward() {
 				// Switch from Other Issues to My Issues
 				a.activeIssuesSection = IssuesSectionMy
 			} else {
-				// Switch from My Issues to Navigation pane
-				a.focusedPane = FocusNavigation
+				// Switch from My Issues back to Details (wrap; no navigation pane)
+				a.focusedPane = FocusDetails
+				a.focusedDetailsView = false
 			}
 		} else {
-			// Only one section exists, move to Navigation
-			a.focusedPane = FocusNavigation
+			// Only one section exists, wrap back to Details
+			a.focusedPane = FocusDetails
+			a.focusedDetailsView = false
 		}
 	case FocusDetails:
 		a.focusedPane = FocusIssues
@@ -1413,7 +1429,7 @@ func (a *App) closePalette() {
 	a.cancelSearchDebounce()
 	a.paletteCtrl.SetSearchMode(false)
 	a.pages.HidePage("palette")
-	a.focusedPane = FocusNavigation
+	a.focusedPane = FocusIssues
 	a.updateFocus()
 }
 
@@ -2023,32 +2039,23 @@ func (a *App) updateStatusBar() {
 	case FocusNavigation:
 		helpText = fmt.Sprintf("%s↑↓: navigate | Enter: select | Tab/→/l: next pane | Shift+Tab/←/h: prev pane | :: palette | /: search | q: quit[-]", keyColor)
 	case FocusIssues:
-		helpText = fmt.Sprintf("%sj/k: navigate | Enter: select | Tab/→/l: next pane | Shift+Tab/←/h: prev pane | :: palette | /: search | q: quit[-]", keyColor)
+		helpText = fmt.Sprintf("%sj/k: navigate | Enter: select | Tab/→/l: next pane | P: project | :: palette | /: search | q: quit[-]", keyColor)
 	case FocusDetails:
-		helpText = fmt.Sprintf("%sj/k: scroll | Tab: switch description/comments | →/l: next pane | Shift+Tab/←/h: prev pane | :: palette | /: search | q: quit[-]", keyColor)
+		helpText = fmt.Sprintf("%sj/k: scroll | Tab: switch description/comments | ←/h: issues | :: palette | /: search | q: quit[-]", keyColor)
 	case FocusPalette:
 		helpText = fmt.Sprintf("%s↑↓: navigate | Enter: execute | Esc: close[-]", keyColor)
 	default:
 		helpText = fmt.Sprintf("%sj/k: navigate | Tab: next pane | Shift+Tab: prev pane | :: palette | /: search | q: quit[-]", keyColor)
 	}
 
-	navText := ""
-	if a.selectedNavigation != nil {
-		label := a.selectedNavigation.Text
-		if a.selectedNavigation.IsStatus {
-			if a.selectedNavigation.StateName != "" {
-				label = fmt.Sprintf("Status: %s", a.selectedNavigation.StateName)
-			} else {
-				label = "Status"
-			}
-		} else if a.selectedNavigation.IsCycle {
-			if a.selectedNavigation.CycleName != "" {
-				label = fmt.Sprintf("Cycle: %s", a.selectedNavigation.CycleName)
-			} else {
-				label = "Cycle"
-			}
-		}
-		navText = fmt.Sprintf("%s%s[-]", a.themeTags.Accent, label)
+	// Persistent project-scope indicator: the primary navigation control now
+	// that the navigation tree is gone. Always shown so the current scope (a
+	// single project or "All Projects") is unambiguous.
+	scopeText := fmt.Sprintf("%sProject: All[-]", a.themeTags.SecondaryText)
+	if a.richFilters.ProjectName != "" {
+		scopeText = fmt.Sprintf("%sProject: %s[-]", a.themeTags.Accent, a.richFilters.ProjectName)
+	} else if a.richFilters.ProjectID != "" {
+		scopeText = fmt.Sprintf("%sProject: %s[-]", a.themeTags.Accent, a.richFilters.ProjectID)
 	}
 
 	searchText := ""
@@ -2071,9 +2078,7 @@ func (a *App) updateStatusBar() {
 	sep := fmt.Sprintf("%s | [-]", a.themeTags.Border)
 
 	parts := []string{helpText}
-	if navText != "" {
-		parts = append(parts, navText)
-	}
+	parts = append(parts, scopeText)
 	if searchText != "" {
 		parts = append(parts, searchText)
 	}
@@ -2128,6 +2133,10 @@ func (a *App) GetSelectedIssue() *linearapi.Issue {
 func (a *App) GetSelectedTeamID() string {
 	if a.selectedNavigation != nil && a.selectedNavigation.TeamID != "" {
 		return a.selectedNavigation.TeamID
+	}
+	// Prefer the team of the currently scoped project, if any.
+	if a.selectedProjectTeamID != "" {
+		return a.selectedProjectTeamID
 	}
 	// If we have a selected issue, use its team
 	a.issuesMu.RLock()

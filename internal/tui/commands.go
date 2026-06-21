@@ -412,6 +412,15 @@ func DefaultCommands(app *App) []Command {
 			},
 		},
 		{
+			ID:           "select_project",
+			Title:        "Select project (scope)",
+			Keywords:     []string{"project", "scope", "select", "all projects"},
+			ShortcutRune: 'P',
+			Run: func(a *App) {
+				a.showProjectScopePicker()
+			},
+		},
+		{
 			ID:       "filter_project",
 			Title:    "Filter by project",
 			Keywords: []string{"filter", "project"},
