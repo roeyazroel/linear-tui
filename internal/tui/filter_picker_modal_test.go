@@ -70,6 +70,61 @@ func TestSetProjectScope(t *testing.T) {
 	}
 }
 
+func TestRefreshIssues_DefaultsToMyFavorites(t *testing.T) {
+	app := newScopeTestApp(t)
+	app.currentUser = &linearapi.User{ID: "me"}
+	app.favoriteProjects = []linearapi.Project{{ID: "p1"}, {ID: "p2"}}
+
+	called := make(chan linearapi.FetchIssuesParams, 1)
+	app.fetchIssuesPage = func(ctx context.Context, params linearapi.FetchIssuesParams, after *string) (linearapi.IssuePage, error) {
+		select {
+		case called <- params:
+		default:
+		}
+		return linearapi.IssuePage{Issues: []linearapi.Issue{}, HasNext: false}, nil
+	}
+
+	app.refreshIssues()
+
+	select {
+	case params := <-called:
+		if params.AssigneeID != "me" {
+			t.Fatalf("AssigneeID = %q, want %q", params.AssigneeID, "me")
+		}
+		if len(params.ProjectIDs) != 2 || params.ProjectIDs[0] != "p1" || params.ProjectIDs[1] != "p2" {
+			t.Fatalf("ProjectIDs = %v, want [p1 p2]", params.ProjectIDs)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fetchIssuesPage was not called")
+	}
+}
+
+func TestRefreshIssues_ToggleAllAssignees(t *testing.T) {
+	app := newScopeTestApp(t)
+	app.currentUser = &linearapi.User{ID: "me"}
+
+	called := make(chan linearapi.FetchIssuesParams, 1)
+	app.fetchIssuesPage = func(ctx context.Context, params linearapi.FetchIssuesParams, after *string) (linearapi.IssuePage, error) {
+		select {
+		case called <- params:
+		default:
+		}
+		return linearapi.IssuePage{Issues: []linearapi.Issue{}, HasNext: false}, nil
+	}
+
+	app.myIssuesOnly = false
+	app.refreshIssues()
+
+	select {
+	case params := <-called:
+		if params.AssigneeID != "" {
+			t.Fatalf("AssigneeID = %q, want empty (all assignees)", params.AssigneeID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fetchIssuesPage was not called")
+	}
+}
+
 func TestSetProjectScope_SetsTeamContext(t *testing.T) {
 	app := newScopeTestApp(t)
 	app.setProjectScope("proj-1", "Telehealth", "team-9")

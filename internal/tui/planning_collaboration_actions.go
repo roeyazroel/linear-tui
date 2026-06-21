@@ -300,23 +300,46 @@ func (a *App) showProjectFilter() {
 	a.showProjectScopePicker()
 }
 
-// showProjectScopePicker scopes the issue list to a single project (or "All
-// Projects") via a type-to-filter picker over every project across all teams.
-// This is the primary navigation control now that the navigation tree is gone.
+// favoriteProjectIDs returns the IDs of the viewer's favorite projects.
+func (a *App) favoriteProjectIDs() []string {
+	if len(a.favoriteProjects) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(a.favoriteProjects))
+	for _, p := range a.favoriteProjects {
+		ids = append(ids, p.ID)
+	}
+	return ids
+}
+
+// toggleMyIssuesOnly switches between showing only the current user's issues and
+// showing issues for all assignees, then refreshes.
+func (a *App) toggleMyIssuesOnly() {
+	a.myIssuesOnly = !a.myIssuesOnly
+	if a.myIssuesOnly {
+		a.applyFiltersAndRefresh("Showing my issues")
+	} else {
+		a.applyFiltersAndRefresh("Showing all assignees")
+	}
+}
+
+// showProjectScopePicker scopes the issue list to a single favorite project (or
+// "All Favourite Projects") via a type-to-filter picker. This is the primary
+// navigation control now that the navigation tree is gone.
 func (a *App) showProjectScopePicker() {
-	if len(a.allProjects) > 0 {
-		a.presentProjectScopePicker(a.allProjects)
+	if len(a.favoriteProjects) > 0 {
+		a.presentProjectScopePicker(a.favoriteProjects)
 		return
 	}
-	a.flashStatus("Loading projects...")
+	a.flashStatus("Loading favorite projects...")
 	go func() {
-		projects, err := a.api.ListAllProjects(context.Background())
+		projects, err := a.api.ListFavoriteProjects(context.Background())
 		a.QueueUpdateDraw(func() {
 			if err != nil {
 				a.updateStatusBarWithError(err)
 				return
 			}
-			a.allProjects = projects
+			a.favoriteProjects = projects
 			a.presentProjectScopePicker(projects)
 		})
 	}()
@@ -324,7 +347,7 @@ func (a *App) showProjectScopePicker() {
 
 func (a *App) presentProjectScopePicker(projects []linearapi.Project) {
 	items := make([]PickerItem, 0, len(projects)+1)
-	items = append(items, PickerItem{ID: "", Label: "All Projects"})
+	items = append(items, PickerItem{ID: "", Label: "All Favourite Projects"})
 	projectNames := make(map[string]string, len(projects))
 	projectTeams := make(map[string]string, len(projects))
 	for _, project := range projects {
@@ -345,7 +368,7 @@ func (a *App) setProjectScope(projectID, projectName, teamID string) {
 	a.richFilters.ProjectName = projectName
 	a.selectedProjectTeamID = teamID
 	if projectID == "" {
-		a.applyFiltersAndRefresh("Showing all projects")
+		a.applyFiltersAndRefresh("Showing all favourite projects")
 		return
 	}
 	if teamID != "" && a.loadTeamMetadataFunc != nil {

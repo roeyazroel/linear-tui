@@ -414,10 +414,18 @@ func DefaultCommands(app *App) []Command {
 		{
 			ID:           "select_project",
 			Title:        "Select project (scope)",
-			Keywords:     []string{"project", "scope", "select", "all projects"},
+			Keywords:     []string{"project", "scope", "select", "favourite", "favorite"},
 			ShortcutRune: 'P',
 			Run: func(a *App) {
 				a.showProjectScopePicker()
+			},
+		},
+		{
+			ID:       "toggle_my_issues",
+			Title:    "Toggle my issues / all assignees",
+			Keywords: []string{"my", "mine", "all", "assignee", "toggle", "everyone"},
+			Run: func(a *App) {
+				a.toggleMyIssuesOnly()
 			},
 		},
 		{

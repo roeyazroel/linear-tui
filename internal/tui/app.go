@@ -216,8 +216,9 @@ type App struct {
 	teamCycles     []linearapi.Cycle
 
 	// Project scope (bottom-bar project picker)
-	allProjects           []linearapi.Project // All projects across teams, lazily loaded
+	favoriteProjects      []linearapi.Project // Viewer's favorite projects, loaded at startup
 	selectedProjectTeamID string              // Team of the scoped project, for team-dependent actions
+	myIssuesOnly          bool                // When true, only issues assigned to the current user are fetched
 
 	// Loading state
 	isLoading                      bool
@@ -288,6 +289,7 @@ func NewApp(api *linearapi.Client, cfg config.Config, templates []config.AgentPr
 		otherIDToIssue:       make(map[string]*linearapi.Issue),
 		activeIssuesSection:  IssuesSectionOther, // Default to Other section
 		agentPromptTemplates: templates,
+		myIssuesOnly:         true, // Default to showing only the current user's issues
 	}
 
 	app.paletteCtrl = NewPaletteController(DefaultCommands(app))
@@ -338,9 +340,19 @@ func (a *App) loadInitialData() {
 			logger.Warning("tui.app: failed to load current user error=%v", err)
 		}
 
-		// Load issues for the initial view. With no project scope selected this
-		// shows issues across all teams ("All Projects"). Project scope is chosen
-		// from the bottom-bar project picker.
+		// Load the viewer's favorite projects. The default view is scoped to
+		// these (see refreshIssuesWithFocusChange), and the project picker lists
+		// them.
+		if favorites, err := a.api.ListFavoriteProjects(ctx); err != nil {
+			logger.Warning("tui.app: failed to load favorite projects error=%v", err)
+		} else {
+			a.favoriteProjects = favorites
+			logger.Debug("tui.app: loaded favorite projects count=%d", len(favorites))
+		}
+
+		// Load issues for the initial view: issues assigned to the current user
+		// within their favorite projects. Project scope is then changed from the
+		// bottom-bar project picker.
 		a.refreshIssues()
 	}()
 }
@@ -1575,6 +1587,21 @@ func (a *App) refreshIssuesWithFocusChange(allowFocusChange bool, issueID ...str
 			// If "All Issues", no team/project filter
 		}
 
+		// Default to issues assigned to the current user unless an explicit
+		// assignee filter is already applied or the user toggled this off.
+		if a.myIssuesOnly && params.AssigneeID == "" && a.currentUser != nil {
+			params.AssigneeID = a.currentUser.ID
+		}
+
+		// When no single project is scoped, default to the viewer's favorite
+		// projects so the initial view stays focused instead of spanning the
+		// whole workspace.
+		if params.ProjectID == "" && len(params.ProjectIDs) == 0 {
+			if ids := a.favoriteProjectIDs(); len(ids) > 0 {
+				params.ProjectIDs = ids
+			}
+		}
+
 		fetchPage := a.fetchIssuesPage
 		if fetchPage == nil {
 			fetchPage = a.api.FetchIssuesPage
@@ -2053,12 +2080,17 @@ func (a *App) updateStatusBar() {
 
 	// Persistent project-scope indicator: the primary navigation control now
 	// that the navigation tree is gone. Always shown so the current scope (a
-	// single project or "All Projects") is unambiguous.
-	scopeText := fmt.Sprintf("%sProject: All[-]", a.themeTags.SecondaryText)
+	// single favourite project or all favourites) is unambiguous.
+	scopeLabel := "Favourites"
 	if a.richFilters.ProjectName != "" {
-		scopeText = fmt.Sprintf("%sProject: %s[-]", a.themeTags.Accent, a.richFilters.ProjectName)
+		scopeLabel = a.richFilters.ProjectName
 	} else if a.richFilters.ProjectID != "" {
-		scopeText = fmt.Sprintf("%sProject: %s[-]", a.themeTags.Accent, a.richFilters.ProjectID)
+		scopeLabel = a.richFilters.ProjectID
+	}
+	scopeText := fmt.Sprintf("%sProject: %s[-]", a.themeTags.Accent, scopeLabel)
+	// Assignee-scope indicator (only when broadened beyond the current user).
+	if !a.myIssuesOnly {
+		scopeText += fmt.Sprintf(" %sAssignee: all[-]", a.themeTags.Warning)
 	}
 
 	searchText := ""

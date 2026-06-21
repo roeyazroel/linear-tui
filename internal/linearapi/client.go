@@ -377,8 +377,12 @@ type IssuePage struct {
 
 // FetchIssuesParams contains parameters for fetching issues.
 type FetchIssuesParams struct {
-	TeamID             string
-	ProjectID          string
+	TeamID    string
+	ProjectID string
+	// ProjectIDs restricts results to issues in any of these projects
+	// (project.id.in). Ignored when ProjectID is set (single-project takes
+	// precedence).
+	ProjectIDs         []string
 	StateID            string
 	CycleID            string
 	AssigneeID         string
@@ -646,31 +650,34 @@ func (c *Client) ListProjects(ctx context.Context, teamID string) ([]Project, er
 	return projects, nil
 }
 
-// ListAllProjects fetches every project accessible to the viewer across all
-// teams, paginating through the workspace-level projects connection. A project
-// can belong to multiple teams; TeamID is set to its first team so that
-// team-scoped actions have a sensible default context.
-func (c *Client) ListAllProjects(ctx context.Context) ([]Project, error) {
+// ListFavoriteProjects fetches the viewer's favorited projects, paginating
+// through the favorites connection and keeping only favorites that reference a
+// project. A project can belong to multiple teams; TeamID is set to its first
+// team so that team-scoped actions have a sensible default context.
+func (c *Client) ListFavoriteProjects(ctx context.Context) ([]Project, error) {
 	var after *string
 	projects := make([]Project, 0)
+	seen := make(map[string]bool)
 
 	for {
 		var query struct {
-			Projects struct {
+			Favorites struct {
 				Nodes []struct {
-					ID    graphql.String
-					Name  graphql.String
-					Teams struct {
-						Nodes []struct {
-							ID graphql.String
-						}
-					} `graphql:"teams(first: 1)"`
+					Project *struct {
+						ID    graphql.String
+						Name  graphql.String
+						Teams struct {
+							Nodes []struct {
+								ID graphql.String
+							}
+						} `graphql:"teams(first: 1)"`
+					}
 				}
 				PageInfo struct {
 					HasNextPage graphql.Boolean
 					EndCursor   graphql.String
 				}
-			} `graphql:"projects(first: $first, after: $after)"`
+			} `graphql:"favorites(first: $first, after: $after)"`
 		}
 
 		var afterCursor *graphql.String
@@ -680,31 +687,39 @@ func (c *Client) ListAllProjects(ctx context.Context) ([]Project, error) {
 		}
 
 		variables := map[string]interface{}{
-			"first": graphql.Int(50),
+			"first": graphql.Int(100),
 			"after": afterCursor,
 		}
 
 		if err := c.client.Query(ctx, &query, variables); err != nil {
-			logger.ErrorWithErr(err, "linearapi.client: ListAllProjects failed")
-			return nil, fmt.Errorf("list all projects: %w", err)
+			logger.ErrorWithErr(err, "linearapi.client: ListFavoriteProjects failed")
+			return nil, fmt.Errorf("list favorite projects: %w", err)
 		}
 
-		for _, node := range query.Projects.Nodes {
+		for _, node := range query.Favorites.Nodes {
+			if node.Project == nil {
+				continue
+			}
+			id := string(node.Project.ID)
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
 			teamID := ""
-			if len(node.Teams.Nodes) > 0 {
-				teamID = string(node.Teams.Nodes[0].ID)
+			if len(node.Project.Teams.Nodes) > 0 {
+				teamID = string(node.Project.Teams.Nodes[0].ID)
 			}
 			projects = append(projects, Project{
-				ID:     string(node.ID),
-				Name:   string(node.Name),
+				ID:     id,
+				Name:   string(node.Project.Name),
 				TeamID: teamID,
 			})
 		}
 
-		if !bool(query.Projects.PageInfo.HasNextPage) {
+		if !bool(query.Favorites.PageInfo.HasNextPage) {
 			break
 		}
-		cursor := string(query.Projects.PageInfo.EndCursor)
+		cursor := string(query.Favorites.PageInfo.EndCursor)
 		after = &cursor
 	}
 
@@ -988,6 +1003,8 @@ func buildBaseIssueFilter(params FetchIssuesParams) IssueFilter {
 	}
 	if params.ProjectID != "" {
 		filter["project"] = map[string]interface{}{"id": map[string]interface{}{"eq": params.ProjectID}}
+	} else if len(params.ProjectIDs) > 0 {
+		filter["project"] = map[string]interface{}{"id": map[string]interface{}{"in": params.ProjectIDs}}
 	}
 	if params.StateID != "" {
 		filter["state"] = map[string]interface{}{"id": map[string]interface{}{"eq": params.StateID}}
