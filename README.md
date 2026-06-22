@@ -2,6 +2,19 @@
 
 A terminal user interface (TUI) for Linear built with Go and tview.
 
+## Changes in this fork
+
+This fork reworks navigation and default filtering around a project-focused, low-noise workflow:
+
+- **Removed the navigation tree** — the Issues and Details panes now use the full width. Navigation is keyboard/palette driven.
+- **Project-scope picker** — press `P` (or `:` → "Select project (scope)") for a type-to-filter picker over your **favourite projects**, with an "All Favourite Projects" reset. The current scope is shown in the status bar.
+- **Focused default view** — on startup the app shows issues for **all assignees** within your **favourite projects**, with closed issues hidden.
+- **Hide closed issues by default** — Done / Cancelled / Duplicate issues are excluded server-side (`state.type`) so they are never fetched. Toggle with `:` → "Toggle closed issues". A duplicate's canonical (active) issue remains visible.
+- **My issues toggle** — `:` → "Toggle my issues / all assignees" narrows to your own issues (shown as `Mine` in the status bar).
+- **Improved My/Other split** — issues are grouped by their **own assignee**, so a sub-issue assigned to you appears under "My Issues" even when its parent belongs to someone else.
+- **Command palette vim keys** — `Ctrl-j` / `Ctrl-k` (and `Ctrl-n` / `Ctrl-p`) move the selection while typing to filter.
+- **Details view rendering fix** — descriptions and comments render at the pane's actual width without the markdown left margin, fixing ragged wrapping and indentation.
+
 ## Screenshots
 
 ![Main interface](docs/main.jpeg)
@@ -16,7 +29,7 @@ A terminal user interface (TUI) for Linear built with Go and tview.
 
 ## Features
 
-- 3-pane layout (navigation tree + issues list + details view)
+- 2-pane layout (issues list + details view) with a project-scope picker
 - Command palette for quick actions with keyboard shortcuts
 - Vim-style keyboard navigation (j/k, h/l, g/G)
 - Mouse support (click to focus, scroll to navigate)
@@ -175,11 +188,13 @@ To disable logging, set `log_file` to an empty string in the settings file or vi
 
 - `:` - Open command palette
 - `/` - Open search palette
+- `Ctrl-j` / `Ctrl-k` (or `Ctrl-n` / `Ctrl-p`) - Move selection in the palette while filtering
 - `ask agent` - Run a terminal agent on the selected issue
 
 ### Quick Commands
 
 - `r` - Refresh issues
+- `P` - Select project to scope to (favourite projects)
 - `n` - Create new issue
 - `e` - Edit issue title
 - `g` - Edit issue labels
