@@ -16,20 +16,21 @@ const (
 	IconChildPrefix = "└─"
 )
 
-// formatPriority formats a priority value into a display string with icon and label.
+// formatPriority formats a priority value into a display string with icon, label,
+// foreground color, and background color.
 // Linear priority: 0 = No priority, 1 = Urgent, 2 = High, 3 = Normal, 4 = Low.
-func formatPriority(priority int, theme Theme) (string, tcell.Color) {
+func formatPriority(priority int, theme Theme) (string, tcell.Color, tcell.Color) {
 	switch priority {
 	case 1:
-		return Icons.Priority + " Urgent", theme.StatusCanceled // Red for urgent
+		return Icons.Priority + " Urgent", theme.PriorityUrgent, theme.PriorityBgUrgent
 	case 2:
-		return Icons.Priority + " High", theme.StatusInProgress // Yellow for high
+		return Icons.Priority + " High", theme.PriorityHigh, theme.PriorityBgHigh
 	case 3:
-		return Icons.Priority + " Normal", theme.Foreground // Default for normal
+		return Icons.Priority + " Normal", theme.PriorityNormal, theme.PriorityBgNormal
 	case 4:
-		return Icons.Priority + " Low", theme.SecondaryText // Gray for low
+		return Icons.Priority + " Low", theme.PriorityLow, theme.PriorityBgLow
 	default:
-		return "-", theme.SecondaryText // No priority
+		return "-", theme.PriorityNone, theme.Background
 	}
 }
 
@@ -474,25 +475,41 @@ func renderIssuesTableModel(table *tview.Table, rows []IssueRow, idToIssue map[s
 			SetTextColor(theme.SecondaryText).
 			SetAlign(tview.AlignLeft))
 
-		// State with color based on state
+		// State with color and background based on state
 		state := issue.State
-		var stateColor tcell.Color
+		var stateColor, stateBgColor tcell.Color
 		var stateIcon string
 
-		// Color code states
+		// Color code states — match exactly for known states, fall back to fuzzy for custom
 		lowerState := strings.ToLower(state)
 		switch {
 		case strings.Contains(lowerState, "done") || strings.Contains(lowerState, "complete"):
 			stateColor = theme.StatusDone
+			stateBgColor = theme.StatusBgDone
+			stateIcon = Icons.Done
+		case strings.Contains(lowerState, "cancel"):
+			stateColor = theme.StatusCanceled
+			stateBgColor = theme.StatusBgCanceled
 			stateIcon = Icons.Done
 		case strings.Contains(lowerState, "progress"):
 			stateColor = theme.StatusInProgress
+			stateBgColor = theme.StatusBgInProgress
 			stateIcon = Icons.InProgress
-		case strings.Contains(lowerState, "cancel"):
-			stateColor = theme.StatusCanceled
-			stateIcon = Icons.Done
+		case strings.Contains(lowerState, "review"):
+			stateColor = theme.StatusInReview
+			stateBgColor = theme.StatusBgInReview
+			stateIcon = Icons.InProgress
+		case strings.Contains(lowerState, "triage"):
+			stateColor = theme.StatusTriage
+			stateBgColor = theme.StatusBgTriage
+			stateIcon = Icons.Todo
+		case strings.Contains(lowerState, "backlog"):
+			stateColor = theme.StatusBacklog
+			stateBgColor = theme.StatusBgBacklog
+			stateIcon = Icons.Todo
 		default:
 			stateColor = theme.StatusTodo
+			stateBgColor = theme.StatusBgTodo
 			stateIcon = Icons.Todo
 		}
 
@@ -500,14 +517,16 @@ func renderIssuesTableModel(table *tview.Table, rows []IssueRow, idToIssue map[s
 			state = state[:12]
 		}
 
-		table.SetCell(row, 1, tview.NewTableCell(stateIcon+" "+state).
+		table.SetCell(row, 1, tview.NewTableCell(" "+stateIcon+" "+state+" ").
 			SetTextColor(stateColor).
+			SetBackgroundColor(stateBgColor).
 			SetAlign(tview.AlignLeft))
 
-		// Priority
-		priorityText, priorityColor := formatPriority(issue.Priority, theme)
-		table.SetCell(row, 2, tview.NewTableCell(priorityText).
+		// Priority with color and background
+		priorityText, priorityColor, priorityBgColor := formatPriority(issue.Priority, theme)
+		table.SetCell(row, 2, tview.NewTableCell(" "+priorityText+" ").
 			SetTextColor(priorityColor).
+			SetBackgroundColor(priorityBgColor).
 			SetAlign(tview.AlignLeft))
 
 		// Assignee
@@ -645,7 +664,7 @@ func renderIssueRow(issue linearapi.Issue) []string {
 		state = state[:10]
 	}
 
-	priorityText, _ := formatPriority(issue.Priority, LinearTheme)
+	priorityText, _, _ := formatPriority(issue.Priority, LinearTheme)
 
 	assignee := issue.Assignee
 	if assignee == "" {

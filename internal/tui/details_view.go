@@ -200,7 +200,8 @@ func (a *App) updateDetailsView() {
 	}
 
 	// Metadata grid simulation
-	headerLines = append(headerLines, fmt.Sprintf("%sState:[-]      %s%s[-]", keyColor, valColor, issue.State))
+	stateColorTag := stateToColorTag(issue.State, a.theme)
+	headerLines = append(headerLines, fmt.Sprintf("%sState:[-]      %s%s[-]", keyColor, stateColorTag, issue.State))
 
 	assignee := "Unassigned"
 	if issue.Assignee != "" {
@@ -208,7 +209,9 @@ func (a *App) updateDetailsView() {
 	}
 	headerLines = append(headerLines, fmt.Sprintf("%sAssignee:[-]   %s%s[-]", keyColor, valColor, assignee))
 
-	headerLines = append(headerLines, fmt.Sprintf("%sPriority:[-]   %s%d[-]", keyColor, valColor, issue.Priority))
+	priorityLabel, priorityColor, _ := formatPriority(issue.Priority, a.theme)
+	priorityTag := colorTag(priorityColor)
+	headerLines = append(headerLines, fmt.Sprintf("%sPriority:[-]   %s%s[-]", keyColor, priorityTag, priorityLabel))
 
 	cycle := "No cycle"
 	if issue.Cycle != nil {
@@ -245,10 +248,11 @@ func (a *App) updateDetailsView() {
 		headerLines = append(headerLines, fmt.Sprintf("%sSub-issues:[-] %s%d items[-]", keyColor, valColor, len(issue.Children)))
 		for _, child := range issue.Children {
 			// Show child identifier, state, and title
-			childLine := fmt.Sprintf("  %s└─[-] %s%s[-] %s[%s][-] %s%s[-]",
+			childStateTag := stateToColorTag(child.State, a.theme)
+			childLine := fmt.Sprintf("  %s└─[-] %s%s[-] %s%s[-] %s%s[-]",
 				keyColor,
 				accentColor, child.Identifier,
-				keyColor, child.State,
+				childStateTag, child.State,
 				valColor, child.Title)
 			headerLines = append(headerLines, childLine)
 		}
@@ -371,4 +375,28 @@ func (a *App) updateDetailsView() {
 	if a.focusedPane == FocusDetails && !a.detailsCommentsVisible {
 		a.updateFocus()
 	}
+}
+
+// stateToColorTag maps a Linear workflow state name to a tview color tag using
+// the active theme. It uses the same matching logic as the table renderer.
+func stateToColorTag(state string, theme Theme) string {
+	lower := strings.ToLower(state)
+	var c tcell.Color
+	switch {
+	case strings.Contains(lower, "done") || strings.Contains(lower, "complete"):
+		c = theme.StatusDone
+	case strings.Contains(lower, "cancel"):
+		c = theme.StatusCanceled
+	case strings.Contains(lower, "progress"):
+		c = theme.StatusInProgress
+	case strings.Contains(lower, "review"):
+		c = theme.StatusInReview
+	case strings.Contains(lower, "triage"):
+		c = theme.StatusTriage
+	case strings.Contains(lower, "backlog"):
+		c = theme.StatusBacklog
+	default:
+		c = theme.StatusTodo
+	}
+	return colorTag(c)
 }

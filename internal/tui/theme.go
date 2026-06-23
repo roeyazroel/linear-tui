@@ -24,8 +24,33 @@ type Theme struct {
 	// Status Colors
 	StatusTodo       tcell.Color
 	StatusInProgress tcell.Color
+	StatusInReview   tcell.Color
+	StatusTriage     tcell.Color
+	StatusBacklog    tcell.Color
 	StatusDone       tcell.Color
 	StatusCanceled   tcell.Color
+
+	// Status Background Colors (for pill/badge rendering in the table)
+	StatusBgTodo       tcell.Color
+	StatusBgInProgress tcell.Color
+	StatusBgInReview   tcell.Color
+	StatusBgTriage     tcell.Color
+	StatusBgBacklog    tcell.Color
+	StatusBgDone       tcell.Color
+	StatusBgCanceled   tcell.Color
+
+	// Priority Colors
+	PriorityUrgent tcell.Color
+	PriorityHigh   tcell.Color
+	PriorityNormal tcell.Color
+	PriorityLow    tcell.Color
+	PriorityNone   tcell.Color
+
+	// Priority Background Colors (for pill/badge rendering in the table)
+	PriorityBgUrgent tcell.Color
+	PriorityBgHigh   tcell.Color
+	PriorityBgNormal tcell.Color
+	PriorityBgLow    tcell.Color
 }
 
 // LinearTheme is the default dark theme inspired by Linear.
@@ -42,10 +67,32 @@ var LinearTheme = Theme{
 	Accent:        tcell.NewRGBColor(94, 106, 210),  // #5E6AD2
 	InputBg:       tcell.ColorDarkGray,
 
-	StatusTodo:       tcell.NewRGBColor(140, 140, 140), // Gray
+	StatusTodo:       tcell.NewRGBColor(94, 139, 255),  // Blue
 	StatusInProgress: tcell.NewRGBColor(242, 201, 76),  // Yellow
-	StatusDone:       tcell.NewRGBColor(94, 106, 210),  // Purple/Blue (Linear uses purple for done often, or green)
+	StatusInReview:   tcell.NewRGBColor(46, 204, 113),  // Green
+	StatusTriage:     tcell.NewRGBColor(255, 152, 0),   // Orange
+	StatusBacklog:    tcell.NewRGBColor(155, 89, 182),  // Purple
+	StatusDone:       tcell.NewRGBColor(38, 166, 154),  // Teal
 	StatusCanceled:   tcell.NewRGBColor(255, 80, 80),   // Red
+
+	StatusBgTodo:       tcell.NewRGBColor(25, 40, 80),   // Dark blue bg
+	StatusBgInProgress: tcell.NewRGBColor(80, 70, 20),   // Dark amber bg
+	StatusBgInReview:   tcell.NewRGBColor(15, 70, 35),   // Dark green bg
+	StatusBgTriage:     tcell.NewRGBColor(80, 50, 10),   // Dark orange bg
+	StatusBgBacklog:    tcell.NewRGBColor(50, 25, 60),   // Dark purple bg
+	StatusBgDone:       tcell.NewRGBColor(15, 55, 50),   // Dark teal bg
+	StatusBgCanceled:   tcell.NewRGBColor(80, 25, 25),   // Dark red bg
+
+	PriorityUrgent: tcell.NewRGBColor(255, 80, 80),   // Red
+	PriorityHigh:   tcell.NewRGBColor(255, 152, 0),   // Orange
+	PriorityNormal: tcell.NewRGBColor(46, 204, 113),  // Green
+	PriorityLow:    tcell.NewRGBColor(46, 204, 113),  // Green
+	PriorityNone:   tcell.NewRGBColor(120, 120, 120), // Secondary text
+
+	PriorityBgUrgent: tcell.NewRGBColor(80, 25, 25),  // Dark red bg
+	PriorityBgHigh:   tcell.NewRGBColor(80, 50, 10),  // Dark orange bg
+	PriorityBgNormal: tcell.NewRGBColor(15, 70, 35),  // Dark green bg
+	PriorityBgLow:    tcell.NewRGBColor(15, 70, 35),  // Dark green bg
 }
 
 // HighContrastTheme is a high contrast theme for improved legibility.
@@ -62,10 +109,32 @@ var HighContrastTheme = Theme{
 	Accent:        tcell.NewRGBColor(255, 255, 0),   // #FFFF00
 	InputBg:       tcell.NewRGBColor(30, 30, 30),    // #1E1E1E
 
-	StatusTodo:       tcell.NewRGBColor(255, 255, 255), // White
+	StatusTodo:       tcell.NewRGBColor(100, 149, 255), // Blue
 	StatusInProgress: tcell.NewRGBColor(255, 255, 0),   // Yellow
-	StatusDone:       tcell.NewRGBColor(0, 255, 0),     // Green
+	StatusInReview:   tcell.NewRGBColor(0, 255, 0),     // Green
+	StatusTriage:     tcell.NewRGBColor(255, 165, 0),   // Orange
+	StatusBacklog:    tcell.NewRGBColor(200, 120, 255), // Purple
+	StatusDone:       tcell.NewRGBColor(0, 200, 180),   // Teal
 	StatusCanceled:   tcell.NewRGBColor(255, 0, 0),     // Red
+
+	StatusBgTodo:       tcell.NewRGBColor(30, 45, 70),   // Dark blue bg
+	StatusBgInProgress: tcell.NewRGBColor(60, 60, 0),    // Dark yellow bg
+	StatusBgInReview:   tcell.NewRGBColor(0, 60, 0),     // Dark green bg
+	StatusBgTriage:     tcell.NewRGBColor(60, 40, 0),    // Dark orange bg
+	StatusBgBacklog:    tcell.NewRGBColor(50, 30, 70),   // Dark purple bg
+	StatusBgDone:       tcell.NewRGBColor(0, 60, 55),    // Dark teal bg
+	StatusBgCanceled:   tcell.NewRGBColor(60, 0, 0),     // Dark red bg
+
+	PriorityUrgent: tcell.NewRGBColor(255, 60, 60),    // Bright red
+	PriorityHigh:   tcell.NewRGBColor(255, 180, 0),    // Bright orange
+	PriorityNormal: tcell.NewRGBColor(0, 255, 80),     // Bright green
+	PriorityLow:    tcell.NewRGBColor(0, 255, 80),     // Bright green
+	PriorityNone:   tcell.NewRGBColor(200, 200, 200),  // Secondary text
+
+	PriorityBgUrgent: tcell.NewRGBColor(60, 15, 15),   // Dark red bg
+	PriorityBgHigh:   tcell.NewRGBColor(60, 40, 0),    // Dark orange bg
+	PriorityBgNormal: tcell.NewRGBColor(0, 60, 20),    // Dark green bg
+	PriorityBgLow:    tcell.NewRGBColor(0, 60, 20),    // Dark green bg
 }
 
 // ColorBlindTheme is a color-blind friendly palette.
@@ -82,10 +151,32 @@ var ColorBlindTheme = Theme{
 	Accent:        tcell.NewRGBColor(0, 114, 178),   // #0072B2
 	InputBg:       tcell.NewRGBColor(42, 42, 42),    // #2A2A2A
 
-	StatusTodo:       tcell.NewRGBColor(153, 153, 153), // Gray
-	StatusInProgress: tcell.NewRGBColor(86, 180, 233),  // #56B4E9
-	StatusDone:       tcell.NewRGBColor(0, 158, 115),   // #009E73
-	StatusCanceled:   tcell.NewRGBColor(213, 94, 0),    // #D55E00
+	StatusTodo:       tcell.NewRGBColor(86, 180, 233),  // Blue (#56B4E9)
+	StatusInProgress: tcell.NewRGBColor(240, 228, 66),  // Yellow (#F0E442)
+	StatusInReview:   tcell.NewRGBColor(0, 158, 115),   // Green (#009E73)
+	StatusTriage:     tcell.NewRGBColor(230, 159, 0),   // Orange (#E69F00)
+	StatusBacklog:    tcell.NewRGBColor(204, 121, 167), // Purple (#CC79A7)
+	StatusDone:       tcell.NewRGBColor(0, 158, 115),   // Teal/Green (#009E73) — same green, distinct by context
+	StatusCanceled:   tcell.NewRGBColor(213, 94, 0),    // Red-Orange (#D55E00)
+
+	StatusBgTodo:       tcell.NewRGBColor(25, 55, 75),   // Dark blue bg
+	StatusBgInProgress: tcell.NewRGBColor(70, 65, 20),   // Dark yellow bg
+	StatusBgInReview:   tcell.NewRGBColor(10, 55, 40),   // Dark green bg
+	StatusBgTriage:     tcell.NewRGBColor(65, 45, 10),   // Dark orange bg
+	StatusBgBacklog:    tcell.NewRGBColor(55, 35, 50),   // Dark purple bg
+	StatusBgDone:       tcell.NewRGBColor(10, 55, 40),   // Dark teal bg
+	StatusBgCanceled:   tcell.NewRGBColor(65, 30, 10),   // Dark red-orange bg
+
+	PriorityUrgent: tcell.NewRGBColor(213, 94, 0),    // Red-orange
+	PriorityHigh:   tcell.NewRGBColor(230, 159, 0),   // Orange
+	PriorityNormal: tcell.NewRGBColor(0, 158, 115),   // Green (#009E73)
+	PriorityLow:    tcell.NewRGBColor(0, 158, 115),   // Green (#009E73)
+	PriorityNone:   tcell.NewRGBColor(154, 154, 154), // Secondary text
+
+	PriorityBgUrgent: tcell.NewRGBColor(60, 25, 10),  // Dark red-orange bg
+	PriorityBgHigh:   tcell.NewRGBColor(60, 40, 10),  // Dark orange bg
+	PriorityBgNormal: tcell.NewRGBColor(10, 50, 35),  // Dark green bg
+	PriorityBgLow:    tcell.NewRGBColor(10, 50, 35),  // Dark green bg
 }
 
 // ThemeTags provides tview tag strings derived from a theme.
