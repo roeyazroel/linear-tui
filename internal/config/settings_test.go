@@ -238,6 +238,60 @@ func TestDefaultSettingsAgentDefaults(t *testing.T) {
 	}
 }
 
+// TestLoadSettingsParsesDefaultNavigation verifies default team/project keys load from JSON.
+func TestLoadSettingsParsesDefaultNavigation(t *testing.T) {
+	tmpDir := t.TempDir()
+	settingsPath := filepath.Join(tmpDir, "config.json")
+
+	data := []byte(`{"default_team":"NEX","default_project":"Website"}`)
+	if err := os.WriteFile(settingsPath, data, 0644); err != nil {
+		t.Fatalf("write settings file: %v", err)
+	}
+
+	settings, err := LoadSettings(settingsPath)
+	if err != nil {
+		t.Fatalf("LoadSettings() error: %v", err)
+	}
+
+	expected := DefaultSettings()
+	expected.DefaultTeam = "NEX"
+	expected.DefaultProject = "Website"
+	assertSettingsEqual(t, settings, expected)
+}
+
+// TestConfigFromSettingsPassesDefaultNavigation verifies default team/project reach the config.
+func TestConfigFromSettingsPassesDefaultNavigation(t *testing.T) {
+	settings := DefaultSettings()
+	settings.DefaultTeam = "NEX"
+	settings.DefaultProject = "Website"
+
+	cfg, err := ConfigFromSettings("test-key", settings)
+	if err != nil {
+		t.Fatalf("ConfigFromSettings() error: %v", err)
+	}
+
+	if cfg.DefaultTeam != "NEX" {
+		t.Errorf("DefaultTeam = %q, want %q", cfg.DefaultTeam, "NEX")
+	}
+	if cfg.DefaultProject != "Website" {
+		t.Errorf("DefaultProject = %q, want %q", cfg.DefaultProject, "Website")
+	}
+}
+
+// TestSettingsFromConfigCarriesDefaultNavigation verifies round-tripping config to settings.
+func TestSettingsFromConfigCarriesDefaultNavigation(t *testing.T) {
+	cfg := Config{DefaultTeam: "NEX", DefaultProject: "Website"}
+
+	settings := SettingsFromConfig(cfg)
+
+	if settings.DefaultTeam != "NEX" {
+		t.Errorf("DefaultTeam = %q, want %q", settings.DefaultTeam, "NEX")
+	}
+	if settings.DefaultProject != "Website" {
+		t.Errorf("DefaultProject = %q, want %q", settings.DefaultProject, "Website")
+	}
+}
+
 // assertSettingsEqual compares settings values in tests.
 func assertSettingsEqual(t *testing.T, got Settings, want Settings) {
 	t.Helper()

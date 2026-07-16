@@ -78,6 +78,36 @@ func TestSettingsModalShowsAndBuildsSearchDebounceSetting(t *testing.T) {
 	}
 }
 
+func TestSettingsModalShowsAndBuildsDefaultNavigationSettings(t *testing.T) {
+	app := newUXTestApp()
+	app.config.DefaultTeam = "NEX"
+	app.config.DefaultProject = "Website"
+	modal := app.settingsModal
+
+	modal.Show()
+	defer modal.Hide()
+
+	if got := modal.defaultTeamField.GetText(); got != "NEX" {
+		t.Fatalf("default team field = %q, want NEX", got)
+	}
+	if got := modal.defaultProjectField.GetText(); got != "Website" {
+		t.Fatalf("default project field = %q, want Website", got)
+	}
+
+	modal.defaultTeamField.SetText("ENG")
+	modal.defaultProjectField.SetText("Mobile App")
+	settings, err := modal.settingsFromForm()
+	if err != nil {
+		t.Fatalf("settingsFromForm() error: %v", err)
+	}
+	if settings.DefaultTeam != "ENG" {
+		t.Fatalf("DefaultTeam = %q, want ENG", settings.DefaultTeam)
+	}
+	if settings.DefaultProject != "Mobile App" {
+		t.Fatalf("DefaultProject = %q, want Mobile App", settings.DefaultProject)
+	}
+}
+
 func TestCreateIssueModalShowWithOptionsResetsFocusAndShowsParentContext(t *testing.T) {
 	app := newUXTestApp()
 	modal := app.createIssueModal

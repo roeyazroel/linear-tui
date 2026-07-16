@@ -241,6 +241,8 @@ type SettingsModal struct {
 	agentModelOptions    []string
 	agentModelValues     []string
 	agentWorkspaceField  *tview.InputField
+	defaultTeamField     *tview.InputField
+	defaultProjectField  *tview.InputField
 }
 
 // NewSettingsModal creates a new settings modal.
@@ -376,6 +378,16 @@ func NewSettingsModal(app *App) *SettingsModal {
 		SetFieldWidth(60)
 	sm.form.AddFormItem(sm.agentWorkspaceField)
 
+	sm.defaultTeamField = tview.NewInputField().
+		SetLabel("Default team (key or name; blank opens All Issues)").
+		SetFieldWidth(40)
+	sm.form.AddFormItem(sm.defaultTeamField)
+
+	sm.defaultProjectField = tview.NewInputField().
+		SetLabel("Default project (name; requires default team)").
+		SetFieldWidth(40)
+	sm.form.AddFormItem(sm.defaultProjectField)
+
 	sm.form.AddButton("Save", func() {
 		sm.saveSettings()
 	})
@@ -445,6 +457,8 @@ func (sm *SettingsModal) Show() {
 	sm.setAgentModelOptionsForProvider(selectedProvider)
 	sm.setAgentModelSelection(settings.AgentModel)
 	sm.agentWorkspaceField.SetText(settings.AgentWorkspace)
+	sm.defaultTeamField.SetText(settings.DefaultTeam)
+	sm.defaultProjectField.SetText(settings.DefaultProject)
 
 	sm.updateModalHeight()
 	sm.app.pages.AddPage("settings", sm.modal, true, true)
@@ -642,6 +656,8 @@ func (sm *SettingsModal) settingsFromForm() (config.Settings, error) {
 		AgentSandbox:   agentSandbox,
 		AgentModel:     agentModel,
 		AgentWorkspace: strings.TrimSpace(sm.agentWorkspaceField.GetText()),
+		DefaultTeam:    strings.TrimSpace(sm.defaultTeamField.GetText()),
+		DefaultProject: strings.TrimSpace(sm.defaultProjectField.GetText()),
 	}
 	return settings, nil
 }

@@ -239,6 +239,10 @@ type App struct {
 	openURLFunc             func(string) error
 	copyToClipboardFunc     func(string) error
 	refreshCompleted        func()
+	fetchProjectsFunc       func(context.Context, string) ([]linearapi.Project, error)
+	fetchWorkflowStatesFunc func(context.Context, string) ([]linearapi.WorkflowState, error)
+	fetchCyclesFunc         func(context.Context, string) ([]linearapi.Cycle, error)
+	preloadTeamMetadataFunc func(string)
 
 	// UI update mutex (for test safety when queueUpdateDraw executes immediately)
 	uiUpdateMu sync.Mutex
@@ -298,6 +302,10 @@ func NewApp(api *linearapi.Client, cfg config.Config, templates []config.AgentPr
 	app.unsubscribeIssueFunc = api.UnsubscribeFromIssue
 	app.openURLFunc = openURL
 	app.copyToClipboardFunc = copyToClipboard
+	app.fetchProjectsFunc = app.cache.GetProjects
+	app.fetchWorkflowStatesFunc = app.cache.GetWorkflowStates
+	app.fetchCyclesFunc = app.cache.GetCycles
+	app.preloadTeamMetadataFunc = app.preloadTeamMetadata
 	app.queueUpdateDraw = func(f func()) {
 		app.app.QueueUpdateDraw(f)
 	}
@@ -614,6 +622,7 @@ func (a *App) loadNavigationData(ctx context.Context) {
 	a.app.QueueUpdateDraw(func() {
 		a.rebuildNavigationTree(teams)
 	})
+	a.applyDefaultNavigation(ctx, teams)
 }
 
 // rebuildNavigationTree rebuilds the navigation tree with real data.
@@ -712,83 +721,88 @@ func (a *App) onTeamExpanded(teamID string, teamNode *tview.TreeNode) {
 				teamNode.SetExpanded(true)
 				return
 			}
-			if len(cycles) > 0 {
-				sortCyclesForNavigation(cycles)
-				cyclesGroup := tview.NewTreeNode("  Cycles").
-					SetColor(a.theme.SecondaryText).
-					SetSelectable(false).
-					SetReference(&NavigationNode{
-						ID:      fmt.Sprintf("%s-cycles", teamID),
-						Text:    "Cycles",
-						TeamID:  teamID,
-						IsCycle: true,
-					})
-				for _, cycle := range cycles {
-					label := cycle.DisplayName()
-					switch {
-					case cycle.IsActive:
-						label += " (active)"
-					case cycle.IsNext:
-						label += " (next)"
-					case cycle.IsPrevious:
-						label += " (previous)"
-					}
-					cycleNode := tview.NewTreeNode("    " + label).
-						SetColor(a.theme.SecondaryText).
-						SetReference(&NavigationNode{
-							ID:        cycle.ID,
-							Text:      label,
-							TeamID:    teamID,
-							IsCycle:   true,
-							CycleID:   cycle.ID,
-							CycleName: cycle.DisplayName(),
-						})
-					cyclesGroup.AddChild(cycleNode)
-				}
-				teamNode.AddChild(cyclesGroup)
-			}
-			if len(states) > 0 {
-				sort.Slice(states, func(i, j int) bool {
-					return states[i].Position < states[j].Position
-				})
-				statusGroup := tview.NewTreeNode("  Status").
-					SetColor(a.theme.SecondaryText).
-					SetSelectable(false).
-					SetReference(&NavigationNode{
-						ID:       fmt.Sprintf("%s-status", teamID),
-						Text:     "Status",
-						TeamID:   teamID,
-						IsStatus: true,
-					})
-				for _, state := range states {
-					stateNode := tview.NewTreeNode("    " + state.Name).
-						SetColor(a.theme.SecondaryText).
-						SetReference(&NavigationNode{
-							ID:        state.ID,
-							Text:      state.Name,
-							TeamID:    teamID,
-							IsStatus:  true,
-							StateID:   state.ID,
-							StateName: state.Name,
-						})
-					statusGroup.AddChild(stateNode)
-				}
-				teamNode.AddChild(statusGroup)
-			}
-			for _, proj := range projects {
-				projNode := tview.NewTreeNode("  " + proj.Name).
-					SetColor(a.theme.SecondaryText).
-					SetReference(&NavigationNode{
-						ID:        proj.ID,
-						Text:      proj.Name,
-						IsProject: true,
-						TeamID:    teamID,
-					})
-				teamNode.AddChild(projNode)
-			}
+			a.populateTeamNodeChildren(teamNode, teamID, projects, states, cycles)
 			teamNode.SetExpanded(true)
 		})
 	}()
+}
+
+// populateTeamNodeChildren renders cycle, status, and project child nodes under a team node.
+func (a *App) populateTeamNodeChildren(teamNode *tview.TreeNode, teamID string, projects []linearapi.Project, states []linearapi.WorkflowState, cycles []linearapi.Cycle) {
+	if len(cycles) > 0 {
+		sortCyclesForNavigation(cycles)
+		cyclesGroup := tview.NewTreeNode("  Cycles").
+			SetColor(a.theme.SecondaryText).
+			SetSelectable(false).
+			SetReference(&NavigationNode{
+				ID:      fmt.Sprintf("%s-cycles", teamID),
+				Text:    "Cycles",
+				TeamID:  teamID,
+				IsCycle: true,
+			})
+		for _, cycle := range cycles {
+			label := cycle.DisplayName()
+			switch {
+			case cycle.IsActive:
+				label += " (active)"
+			case cycle.IsNext:
+				label += " (next)"
+			case cycle.IsPrevious:
+				label += " (previous)"
+			}
+			cycleNode := tview.NewTreeNode("    " + label).
+				SetColor(a.theme.SecondaryText).
+				SetReference(&NavigationNode{
+					ID:        cycle.ID,
+					Text:      label,
+					TeamID:    teamID,
+					IsCycle:   true,
+					CycleID:   cycle.ID,
+					CycleName: cycle.DisplayName(),
+				})
+			cyclesGroup.AddChild(cycleNode)
+		}
+		teamNode.AddChild(cyclesGroup)
+	}
+	if len(states) > 0 {
+		sort.Slice(states, func(i, j int) bool {
+			return states[i].Position < states[j].Position
+		})
+		statusGroup := tview.NewTreeNode("  Status").
+			SetColor(a.theme.SecondaryText).
+			SetSelectable(false).
+			SetReference(&NavigationNode{
+				ID:       fmt.Sprintf("%s-status", teamID),
+				Text:     "Status",
+				TeamID:   teamID,
+				IsStatus: true,
+			})
+		for _, state := range states {
+			stateNode := tview.NewTreeNode("    " + state.Name).
+				SetColor(a.theme.SecondaryText).
+				SetReference(&NavigationNode{
+					ID:        state.ID,
+					Text:      state.Name,
+					TeamID:    teamID,
+					IsStatus:  true,
+					StateID:   state.ID,
+					StateName: state.Name,
+				})
+			statusGroup.AddChild(stateNode)
+		}
+		teamNode.AddChild(statusGroup)
+	}
+	for _, proj := range projects {
+		projNode := tview.NewTreeNode("  " + proj.Name).
+			SetColor(a.theme.SecondaryText).
+			SetReference(&NavigationNode{
+				ID:        proj.ID,
+				Text:      proj.Name,
+				IsProject: true,
+				TeamID:    teamID,
+			})
+		teamNode.AddChild(projNode)
+	}
 }
 
 func sortCyclesForNavigation(cycles []linearapi.Cycle) {
@@ -1962,29 +1976,32 @@ func (a *App) onNavigationSelected(node *NavigationNode) {
 
 	// Update selected team metadata for commands and create-issue defaults.
 	if node.TeamID != "" {
-		go func() {
-			logger.Debug("tui.app: preloading team metadata team_id=%s", node.TeamID)
-			ctx := context.Background()
-			_ = a.cache.PreloadTeamMetadata(ctx, node.TeamID)
-
-			users, _ := a.cache.GetUsers(ctx, node.TeamID)
-			projects, _ := a.cache.GetProjects(ctx, node.TeamID)
-			states, _ := a.cache.GetWorkflowStates(ctx, node.TeamID)
-			cycles, _ := a.cache.GetCycles(ctx, node.TeamID)
-
-			logger.Debug("tui.app: loaded team metadata team_id=%s users_count=%d projects_count=%d states_count=%d cycles_count=%d", node.TeamID, len(users), len(projects), len(states), len(cycles))
-			a.app.QueueUpdateDraw(func() {
-				a.teamUsers = users
-				a.teamProjects = projects
-				a.workflowStates = states
-				a.teamCycles = cycles
-			})
-		}()
+		go a.preloadTeamMetadataFunc(node.TeamID)
 	}
 
 	// Refresh issues for the new selection - run in goroutine to avoid blocking
 	// the tview callback (QueueUpdateDraw deadlocks if called from within a callback)
 	go a.refreshIssuesWithFocusChange(false)
+}
+
+// preloadTeamMetadata warms team-scoped metadata caches for commands and create-issue defaults.
+func (a *App) preloadTeamMetadata(teamID string) {
+	logger.Debug("tui.app: preloading team metadata team_id=%s", teamID)
+	ctx := context.Background()
+	_ = a.cache.PreloadTeamMetadata(ctx, teamID)
+
+	users, _ := a.cache.GetUsers(ctx, teamID)
+	projects, _ := a.cache.GetProjects(ctx, teamID)
+	states, _ := a.cache.GetWorkflowStates(ctx, teamID)
+	cycles, _ := a.cache.GetCycles(ctx, teamID)
+
+	logger.Debug("tui.app: loaded team metadata team_id=%s users_count=%d projects_count=%d states_count=%d cycles_count=%d", teamID, len(users), len(projects), len(states), len(cycles))
+	a.app.QueueUpdateDraw(func() {
+		a.teamUsers = users
+		a.teamProjects = projects
+		a.workflowStates = states
+		a.teamCycles = cycles
+	})
 }
 
 // setSearchQuery sets the search query and refreshes issues.

@@ -54,6 +54,7 @@ A terminal user interface (TUI) for Linear built with Go and tview.
 - Agent settings live in `config.json`: `agent_provider` (`cursor` or `claude`), `agent_sandbox` (`enabled` or `disabled`), `agent_model` (optional), and `agent_workspace` (optional).
 - Prompt templates are stored in `~/.linear-tui/prompts.json` and edited via the "Edit agent prompt templates" command.
 - `agent_workspace` is the default workspace for agent runs and can be overridden per run in the Ask Agent modal (overrides are not persisted).
+- Startup view settings in `config.json`: `default_team` opens the app with that team selected (matched by team key or name, case-insensitive), and `default_project` narrows it to a project within that team (matched by name). Both are optional; blank opens All Issues. If a value doesn't match, the app falls back to the standard view and shows a status-bar warning.
 
 Example `~/.linear-tui/config.json`:
 
@@ -71,7 +72,9 @@ Example `~/.linear-tui/config.json`:
   "agent_provider": "cursor",
   "agent_sandbox": "enabled",
   "agent_model": "",
-  "agent_workspace": ""
+  "agent_workspace": "",
+  "default_team": "",
+  "default_project": ""
 }
 ```
 
@@ -141,7 +144,9 @@ Example `~/.linear-tui/config.json`:
   "agent_provider": "cursor",
   "agent_sandbox": "enabled",
   "agent_model": "",
-  "agent_workspace": ""
+  "agent_workspace": "",
+  "default_team": "",
+  "default_project": ""
 }
 ```
 
