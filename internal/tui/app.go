@@ -343,11 +343,11 @@ func (a *App) loadInitialData() {
 			logger.Warning("tui.app: failed to load current user error=%v", err)
 		}
 
-		// Fetch teams and build navigation
-		a.loadNavigationData(ctx)
-
-		// Load issues for initial view
-		a.refreshIssues()
+		// Fetch teams and build navigation. Default navigation triggers its own
+		// refresh after applying the configured selection.
+		if !a.loadNavigationData(ctx) {
+			a.refreshIssues()
+		}
 	}()
 }
 
@@ -379,6 +379,9 @@ func (a *App) applySettings(newCfg config.Config) {
 	a.deleteIssueRelationFunc = a.api.DeleteIssueRelation
 	a.subscribeIssueFunc = a.api.SubscribeToIssue
 	a.unsubscribeIssueFunc = a.api.UnsubscribeFromIssue
+	a.fetchProjectsFunc = a.cache.GetProjects
+	a.fetchWorkflowStatesFunc = a.cache.GetWorkflowStates
+	a.fetchCyclesFunc = a.cache.GetCycles
 
 	logger.Debug("tui.app: resetting cached state after settings change")
 	a.resetCachedState()
@@ -607,22 +610,24 @@ func parseLogLevel(level string) logger.LogLevel {
 	}
 }
 
-// loadNavigationData fetches teams and projects from the API and updates the navigation tree.
-func (a *App) loadNavigationData(ctx context.Context) {
+// loadNavigationData fetches teams and projects from the API and updates the
+// navigation tree. It reports whether default navigation started the initial
+// issue refresh.
+func (a *App) loadNavigationData(ctx context.Context) bool {
 	teams, err := a.cache.GetTeams(ctx)
 	if err != nil {
 		logger.ErrorWithErr(err, "tui.app: failed to load teams")
 		a.app.QueueUpdateDraw(func() {
 			a.updateStatusBarWithError(err)
 		})
-		return
+		return false
 	}
 
 	logger.Debug("tui.app: loaded teams count=%d", len(teams))
 	a.app.QueueUpdateDraw(func() {
 		a.rebuildNavigationTree(teams)
 	})
-	a.applyDefaultNavigation(ctx, teams)
+	return a.applyDefaultNavigation(ctx, teams)
 }
 
 // rebuildNavigationTree rebuilds the navigation tree with real data.

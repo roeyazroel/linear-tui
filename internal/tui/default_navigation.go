@@ -14,10 +14,10 @@ import (
 // project) once teams have loaded. It must run off the UI goroutine; UI
 // mutations are queued. Missing teams or projects log a warning and flash the
 // status bar, leaving the standard "All Issues" selection in place.
-func (a *App) applyDefaultNavigation(ctx context.Context, teams []linearapi.Team) {
+func (a *App) applyDefaultNavigation(ctx context.Context, teams []linearapi.Team) bool {
 	teamQuery := strings.TrimSpace(a.config.DefaultTeam)
 	if teamQuery == "" {
-		return
+		return false
 	}
 
 	team := findTeamByKeyOrName(teams, teamQuery)
@@ -26,7 +26,7 @@ func (a *App) applyDefaultNavigation(ctx context.Context, teams []linearapi.Team
 		a.queueUpdateDraw(func() {
 			a.flashStatus(fmt.Sprintf("Default team %q not found", teamQuery))
 		})
-		return
+		return false
 	}
 
 	projects, projectsErr := a.fetchProjectsFunc(ctx, team.ID)
@@ -40,18 +40,32 @@ func (a *App) applyDefaultNavigation(ctx context.Context, teams []linearapi.Team
 	var project *linearapi.Project
 	projectQuery := strings.TrimSpace(a.config.DefaultProject)
 	if projectQuery != "" {
-		project = findProjectByName(projects, projectQuery)
-		if project == nil {
-			logger.Warning("tui.app: default project not found team_id=%s project=%q", team.ID, projectQuery)
+		if projectsErr != nil {
+			logger.Warning("tui.app: failed to load default project team_id=%s project=%q error=%v", team.ID, projectQuery, projectsErr)
 			a.queueUpdateDraw(func() {
-				a.flashStatus(fmt.Sprintf("Default project %q not found", projectQuery))
+				a.flashStatus(fmt.Sprintf("Could not load default project %q", projectQuery))
 			})
+		} else {
+			project = findProjectByName(projects, projectQuery)
+			switch {
+			case project == nil:
+				logger.Warning("tui.app: default project not found team_id=%s project=%q", team.ID, projectQuery)
+				a.queueUpdateDraw(func() {
+					a.flashStatus(fmt.Sprintf("Default project %q not found", projectQuery))
+				})
+			case !childrenLoaded:
+				logger.Warning("tui.app: could not apply default project after partial child load failure team_id=%s project=%q", team.ID, projectQuery)
+				a.queueUpdateDraw(func() {
+					a.flashStatus(fmt.Sprintf("Could not load default project %q", projectQuery))
+				})
+			}
 		}
 	}
 
 	a.queueUpdateDraw(func() {
 		teamNode := a.findTeamTreeNode(team.ID)
 		if teamNode == nil {
+			go a.refreshIssues()
 			return
 		}
 		// Leave children unpopulated on fetch errors so expanding the team retries.
@@ -69,10 +83,14 @@ func (a *App) applyDefaultNavigation(ctx context.Context, teams []linearapi.Team
 			}
 		}
 		a.navigationTree.SetCurrentNode(target)
-		if nav, ok := target.GetReference().(*NavigationNode); ok {
-			a.onNavigationSelected(nav)
+		nav, ok := target.GetReference().(*NavigationNode)
+		if !ok {
+			go a.refreshIssues()
+			return
 		}
+		a.onNavigationSelected(nav)
 	})
+	return true
 }
 
 // findTeamTreeNode returns the tree node for a team ID, or nil if absent.

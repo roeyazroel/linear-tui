@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -170,6 +171,48 @@ func TestApplyDefaultNavigationUnknownProjectSelectsTeam(t *testing.T) {
 	}
 	if !strings.Contains(app.statusMessage, "Missing") {
 		t.Errorf("statusMessage = %q, want mention of missing project", app.statusMessage)
+	}
+}
+
+func TestApplyDefaultNavigationProjectFetchFailureIsNotReportedAsMissing(t *testing.T) {
+	app := newDefaultNavTestApp(config.Config{DefaultTeam: "NEX", DefaultProject: "Website"})
+	app.fetchProjectsFunc = func(context.Context, string) ([]linearapi.Project, error) {
+		return nil, errors.New("temporary projects failure")
+	}
+	refreshDone := installRefreshCompletionHook(app)
+	teams := defaultNavTeams()
+	app.rebuildNavigationTree(teams)
+
+	app.applyDefaultNavigation(context.Background(), teams)
+	waitForRefreshCompletion(t, refreshDone)
+
+	if strings.Contains(strings.ToLower(app.statusMessage), "not found") {
+		t.Fatalf("statusMessage = %q, should report a load failure rather than a missing project", app.statusMessage)
+	}
+	if !strings.Contains(strings.ToLower(app.statusMessage), "load") {
+		t.Fatalf("statusMessage = %q, want project load failure", app.statusMessage)
+	}
+}
+
+func TestApplyDefaultNavigationWarnsWhenProjectCannotBeAppliedAfterPartialLoadFailure(t *testing.T) {
+	app := newDefaultNavTestApp(config.Config{DefaultTeam: "NEX", DefaultProject: "Website"})
+	app.fetchWorkflowStatesFunc = func(context.Context, string) ([]linearapi.WorkflowState, error) {
+		return nil, errors.New("temporary states failure")
+	}
+	refreshDone := installRefreshCompletionHook(app)
+	teams := defaultNavTeams()
+	app.rebuildNavigationTree(teams)
+
+	app.applyDefaultNavigation(context.Background(), teams)
+	waitForRefreshCompletion(t, refreshDone)
+
+	nav := currentNavigationNode(t, app)
+	if !nav.IsTeam || nav.TeamID != "team-2" {
+		t.Fatalf("current node = %+v, want fallback team node for team-2", nav)
+	}
+	if !strings.Contains(strings.ToLower(app.statusMessage), "default project") ||
+		!strings.Contains(strings.ToLower(app.statusMessage), "load") {
+		t.Fatalf("statusMessage = %q, want warning that the default project could not be loaded", app.statusMessage)
 	}
 }
 
