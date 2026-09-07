@@ -99,11 +99,33 @@ type ThemeTags struct {
 	Error         string
 }
 
+// CatppuccinMochaTheme is the dark Mocha flavor of the Catppuccin palette.
+// Colors follow the official palette: https://catppuccin.com/palette/
+var CatppuccinMochaTheme = Theme{
+	Background:    tcell.NewRGBColor(30, 30, 46),    // #1E1E2E (base)
+	Foreground:    tcell.NewRGBColor(205, 214, 244), // #CDD6F4 (text)
+	Border:        tcell.NewRGBColor(69, 71, 90),    // #45475A (surface1)
+	BorderFocus:   tcell.NewRGBColor(203, 166, 247), // #CBA6F7 (mauve)
+	SelectionText: tcell.NewRGBColor(205, 214, 244), // #CDD6F4 (text)
+	SelectionBg:   tcell.NewRGBColor(49, 50, 68),    // #313244 (surface0)
+	HeaderBg:      tcell.NewRGBColor(24, 24, 37),    // #181825 (mantle)
+	HeaderText:    tcell.NewRGBColor(166, 173, 200), // #A6ADC8 (subtext0)
+	SecondaryText: tcell.NewRGBColor(127, 132, 156), // #7F849C (overlay1)
+	Accent:        tcell.NewRGBColor(203, 166, 247), // #CBA6F7 (mauve)
+	InputBg:       tcell.NewRGBColor(49, 50, 68),    // #313244 (surface0)
+
+	StatusTodo:       tcell.NewRGBColor(147, 153, 178), // #9399B2 (overlay2)
+	StatusInProgress: tcell.NewRGBColor(249, 226, 175), // #F9E2AF (yellow)
+	StatusDone:       tcell.NewRGBColor(166, 227, 161), // #A6E3A1 (green)
+	StatusCanceled:   tcell.NewRGBColor(243, 139, 168), // #F38BA8 (red)
+}
+
 // ThemeRegistry maps theme identifiers to theme palettes.
 var ThemeRegistry = map[string]Theme{
-	config.ThemeLinear:       LinearTheme,
-	config.ThemeHighContrast: HighContrastTheme,
-	config.ThemeColorBlind:   ColorBlindTheme,
+	config.ThemeLinear:          LinearTheme,
+	config.ThemeHighContrast:    HighContrastTheme,
+	config.ThemeColorBlind:      ColorBlindTheme,
+	config.ThemeCatppuccinMocha: CatppuccinMochaTheme,
 }
 
 // ResolveTheme returns the theme for a given name, or the default theme.

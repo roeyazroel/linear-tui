@@ -33,7 +33,7 @@ A terminal user interface (TUI) for Linear built with Go and tview.
 - Real-time issue fetching from Linear API
 - Comprehensive logging system for debugging
 - Settings modal with live config updates
-- Themes (linear, high_contrast, color_blind) and density modes
+- Themes (linear, high_contrast, color_blind, catppuccin_mocha) and density modes
 - Status bar with context and search info
 - Clipboard actions (issue ID, issue URL, agent output)
 
@@ -53,7 +53,7 @@ A terminal user interface (TUI) for Linear built with Go and tview.
 - Use `linear-tui auth logout` to revoke (best effort) and delete stored credentials.
 - Settings are stored in `~/.linear-tui/config.json` and created on first start.
 - Use the Settings modal from the command palette (`:` -> `Settings`) to edit and apply settings immediately.
-- UI settings in `config.json`: `theme` (`linear`, `high_contrast`, `color_blind`) and `density` (`comfortable`, `compact`).
+- UI settings in `config.json`: `theme` (`linear`, `high_contrast`, `color_blind`, `catppuccin_mocha`) and `density` (`comfortable`, `compact`).
 - Search settings in `config.json`: `search_debounce` controls the live search debounce delay (default `300ms`).
 - Agent settings live in `config.json`: `agent_provider` (`cursor` or `claude`), `agent_sandbox` (`enabled` or `disabled`), `agent_model` (optional), and `agent_workspace` (optional).
 - Prompt templates are stored in `~/.linear-tui/prompts.json` and edited via the "Edit agent prompt templates" command.
