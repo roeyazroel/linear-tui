@@ -253,8 +253,8 @@ func NewSettingsModal(app *App) *SettingsModal {
 	sm := &SettingsModal{
 		app:                  app,
 		logLevelOptions:      []string{"debug", "info", "warning", "error"},
-		themeOptions:         []string{"Linear", "High contrast", "Color-blind friendly"},
-		themeValues:          []string{config.ThemeLinear, config.ThemeHighContrast, config.ThemeColorBlind},
+		themeOptions:         []string{"Linear", "High contrast", "Color-blind friendly", "Catppuccin Mocha"},
+		themeValues:          []string{config.ThemeLinear, config.ThemeHighContrast, config.ThemeColorBlind, config.ThemeCatppuccinMocha},
 		densityOptions:       []string{"Comfortable", "Compact"},
 		densityValues:        []string{config.DensityComfortable, config.DensityCompact},
 		agentProviderOptions: availableProviders,

@@ -31,6 +31,7 @@ const (
 	ThemeLinear           = "linear"
 	ThemeHighContrast     = "high_contrast"
 	ThemeColorBlind       = "color_blind"
+	ThemeCatppuccinMocha  = "catppuccin_mocha"
 	DefaultTheme          = ThemeLinear
 	DensityComfortable    = "comfortable"
 	DensityCompact        = "compact"
