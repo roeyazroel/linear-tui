@@ -11,6 +11,50 @@ type PaletteController struct {
 	cursor       int
 	filtered     []Command
 	isSearchMode bool
+	// issueContext ranks issue-scoped commands first when the palette was
+	// opened from an issue-focused pane, and last otherwise.
+	issueContext bool
+}
+
+// issueScopedCommands lists command ids that act on the selected issue.
+var issueScopedCommands = map[string]bool{
+	"open_browser": true, "open_github": true, "copy_id": true,
+	"copy_url": true, "copy_branch": true, "ask_agent": true,
+	"set_due_date": true, "clear_due_date": true, "edit_estimate": true,
+	"clear_estimate": true, "set_milestone": true, "clear_milestone": true,
+	"add_issue_relation": true, "remove_issue_relation": true,
+	"subscribe_issue": true, "unsubscribe_issue": true,
+	"open_attachment": true, "copy_attachment_url": true,
+	"assign_me": true, "unassign": true, "archive": true,
+	"change_status": true, "set_cycle": true, "clear_cycle": true,
+	"assign_user": true, "edit_title": true, "edit_labels": true,
+	"toggle_sub_issues": true, "view_parent": true,
+	"create_sub_issue": true, "set_parent": true, "remove_parent": true,
+	"add_comment": true,
+}
+
+// SetIssueContext records whether the palette was opened from an
+// issue-focused pane, reordering results accordingly.
+func (p *PaletteController) SetIssueContext(issueContext bool) {
+	p.issueContext = issueContext
+	if !p.isSearchMode {
+		p.filterCommands()
+	}
+}
+
+// rankByContext stable-partitions commands so the contextually relevant scope
+// comes first.
+func (p *PaletteController) rankByContext(commands []Command) []Command {
+	ranked := make([]Command, 0, len(commands))
+	var deferred []Command
+	for _, cmd := range commands {
+		if issueScopedCommands[cmd.ID] == p.issueContext {
+			ranked = append(ranked, cmd)
+		} else {
+			deferred = append(deferred, cmd)
+		}
+	}
+	return append(ranked, deferred...)
 }
 
 // NewPaletteController creates a new palette controller with the given commands.
@@ -90,7 +134,7 @@ func (p *PaletteController) MoveCursorDown() {
 func (p *PaletteController) Reset() {
 	p.query = ""
 	p.cursor = 0
-	p.filtered = p.commands
+	p.filtered = p.rankByContext(p.commands)
 	p.isSearchMode = false
 }
 
@@ -101,7 +145,7 @@ func (p *PaletteController) SetSearchMode(mode bool) {
 	if mode {
 		p.filtered = nil
 	} else {
-		p.filtered = p.commands
+		p.filtered = p.rankByContext(p.commands)
 	}
 }
 
@@ -113,7 +157,7 @@ func (p *PaletteController) IsSearchMode() bool {
 // filterCommands filters commands based on the query.
 func (p *PaletteController) filterCommands() {
 	if p.query == "" {
-		p.filtered = p.commands
+		p.filtered = p.rankByContext(p.commands)
 		return
 	}
 
@@ -134,5 +178,5 @@ func (p *PaletteController) filterCommands() {
 		}
 	}
 
-	p.filtered = filtered
+	p.filtered = p.rankByContext(filtered)
 }

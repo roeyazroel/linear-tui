@@ -14,10 +14,19 @@ type NavigationNode struct {
 	IsProject bool
 	IsStatus  bool
 	IsCycle   bool
+	IsIssue   bool
 	StateID   string
 	StateName string
 	CycleID   string
 	CycleName string
+	IssueID   string
+	// CustomViewID makes the node show a Linear custom view's issues.
+	CustomViewID string
+	// StateType filters by workflow state type (e.g. triage), scoped to
+	// TeamID when set.
+	StateType string
+	// IsFolder marks a favorites folder; selecting it toggles expansion.
+	IsFolder bool
 }
 
 // buildNavigationTree creates and configures the navigation tree widget.
@@ -47,12 +56,20 @@ func (a *App) buildNavigationTree() *tview.TreeView {
 		ref := node.GetReference()
 		if ref != nil {
 			if navNode, ok := ref.(*NavigationNode); ok {
+				// Folders only expand and collapse.
+				if navNode.IsFolder {
+					node.SetExpanded(!node.IsExpanded())
+					return
+				}
 				// For team nodes, handle expand/collapse
 				if navNode.IsTeam {
 					a.onTeamExpanded(navNode.TeamID, node)
 				}
 				// Update selection and refresh issues
 				a.onNavigationSelected(navNode)
+				// Selecting a view moves focus to the issues list.
+				a.focusedPane = FocusIssues
+				a.updateFocus()
 			}
 		}
 	})

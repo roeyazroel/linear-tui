@@ -11,6 +11,7 @@ import (
 	"github.com/roeyazroel/linear-tui/internal/linearapi"
 	"github.com/roeyazroel/linear-tui/internal/logger"
 	"github.com/roeyazroel/linear-tui/internal/tui"
+	"github.com/roeyazroel/linear-tui/internal/updatecheck"
 )
 
 func main() {
@@ -160,6 +161,9 @@ func runTUI() int {
 	}
 
 	app := tui.NewApp(apiClient, cfg, promptTemplates)
+	app.SetStartupUpdateCheck(func(ctx context.Context) string {
+		return updatecheck.Check(ctx, Version)
+	})
 
 	if err := app.Run(); err != nil {
 		logger.ErrorWithErr(err, "app.main: application error")

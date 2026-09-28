@@ -82,6 +82,65 @@ func TestConfigFromSettingsParsesSearchDebounce(t *testing.T) {
 	}
 }
 
+func TestCatppuccinThemeLoadsAndRoundTripsToConfig(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"theme":"catppuccin_mocha"}`), 0o644); err != nil {
+		t.Fatalf("write settings file: %v", err)
+	}
+	settings, err := LoadSettings(settingsPath)
+	if err != nil {
+		t.Fatalf("LoadSettings() error: %v", err)
+	}
+	if settings.Theme != ThemeCatppuccinMocha {
+		t.Fatalf("loaded theme = %q, want %q", settings.Theme, ThemeCatppuccinMocha)
+	}
+	cfg, err := ConfigFromSettings("test-key", settings)
+	if err != nil {
+		t.Fatalf("ConfigFromSettings() error: %v", err)
+	}
+	if cfg.Theme != ThemeCatppuccinMocha || SettingsFromConfig(cfg).Theme != ThemeCatppuccinMocha {
+		t.Fatalf("Catppuccin theme did not round trip: config=%q settings=%q", cfg.Theme, SettingsFromConfig(cfg).Theme)
+	}
+}
+
+func TestConfigFromSettingsRejectsHardwiredIssueCommandKeys(t *testing.T) {
+	for _, key := range []string{"v", "V", "h", "j", "k", "l", "g", "G"} {
+		settings := DefaultSettings()
+		settings.Keybindings = map[string]string{"refresh": key}
+		if _, err := ConfigFromSettings("test-key", settings); err == nil {
+			t.Fatalf("ConfigFromSettings accepted unreachable refresh binding %q", key)
+		}
+	}
+}
+
+func TestConfigFromSettingsKeepsClassicShortcutDefaultsAndOptInChord(t *testing.T) {
+	settings := DefaultSettings()
+	settings.Keybindings = map[string]string{
+		"edit_title":     "e",
+		"navigate_inbox": "g i",
+		"quit":           "v",
+	}
+	cfg, err := ConfigFromSettings("test-key", settings)
+	if err != nil {
+		t.Fatalf("ConfigFromSettings() error: %v", err)
+	}
+	if cfg.Keybindings["edit_title"] != "e" || cfg.Keybindings["navigate_inbox"] != "g i" || cfg.Keybindings["quit"] != "v" {
+		t.Fatalf("normalized keybindings = %#v", cfg.Keybindings)
+	}
+}
+
+func TestConfigFromSettingsAllowsCommandShortcutToClaimAnotherCommandsDefault(t *testing.T) {
+	settings := DefaultSettings()
+	settings.Keybindings = map[string]string{"copy_url": "y"}
+	cfg, err := ConfigFromSettings("test-key", settings)
+	if err != nil {
+		t.Fatalf("ConfigFromSettings() error: %v", err)
+	}
+	if cfg.Keybindings["copy_url"] != "y" {
+		t.Fatalf("copy_url binding = %q, want y", cfg.Keybindings["copy_url"])
+	}
+}
+
 // TestLoadSettingsPreservesEmptyLogFile ensures an empty log file disables logging.
 func TestLoadSettingsPreservesEmptyLogFile(t *testing.T) {
 	tmpDir := t.TempDir()

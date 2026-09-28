@@ -769,6 +769,108 @@ func TestFetchIssueByID_ParsesRelationsSubscribersAndAttachments(t *testing.T) {
 	}
 }
 
+func TestFetchIssueByID_ParsesCommentThreadsReactionsAndAllPages(t *testing.T) {
+	responses := []string{
+		`{"data":{"issue":{"id":"issue-1","identifier":"ABC-1","title":"Threaded","state":{"id":"state-1","name":"Todo"},"assignee":null,"priority":1,"updatedAt":"2025-01-01T00:00:00Z","createdAt":"2025-01-01T00:00:00Z","description":null,"team":{"id":"team-1"},"project":null,"labels":{"nodes":[]},"url":"https://linear.app/issue/ABC-1","archivedAt":null,"parent":null,"children":{"nodes":[]},"relations":{"nodes":[]},"inverseRelations":{"nodes":[]},"subscribers":{"nodes":[]},"attachments":{"nodes":[]},"comments":{"nodes":[{"id":"comment-1","body":"root","createdAt":"2025-01-01T00:00:00Z","updatedAt":"2025-01-01T00:00:00Z","parent":null,"user":{"id":"user-1","name":"Ada","displayName":"Ada Lovelace","email":"ada@example.com","isMe":true},"reactions":[{"id":"reaction-1","emoji":"👍","createdAt":"2025-01-01T00:01:00Z","updatedAt":"2025-01-01T00:01:00Z","comment":{"id":"comment-1","issue":{"id":"issue-1"}},"user":{"id":"user-2","name":"Grace","displayName":"Grace Hopper","email":"grace@example.com","isMe":false}}]},{"id":"comment-2","body":"reply","createdAt":"2025-01-01T00:02:00Z","updatedAt":"2025-01-01T00:02:00Z","parent":{"id":"comment-1"},"user":{"id":"user-2","name":"Grace","displayName":"Grace Hopper","email":"grace@example.com","isMe":false},"reactions":[]}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"}}}}}`,
+		`{"data":{"issue":{"id":"issue-1","identifier":"ABC-1","title":"Threaded","state":{"id":"state-1","name":"Todo"},"assignee":null,"priority":1,"updatedAt":"2025-01-01T00:00:00Z","createdAt":"2025-01-01T00:00:00Z","description":null,"team":{"id":"team-1"},"project":null,"labels":{"nodes":[]},"url":"https://linear.app/issue/ABC-1","archivedAt":null,"parent":null,"children":{"nodes":[]},"relations":{"nodes":[]},"inverseRelations":{"nodes":[]},"subscribers":{"nodes":[]},"attachments":{"nodes":[]},"comments":{"nodes":[{"id":"comment-3","body":"orphan","createdAt":"2025-01-01T00:03:00Z","updatedAt":"2025-01-01T00:03:00Z","parent":{"id":"missing-parent"},"user":{"id":"user-3","name":"Lin","displayName":"Lin Doe","email":"lin@example.com","isMe":false},"reactions":[{"id":"reaction-3","emoji":"🎉","createdAt":"2025-01-01T00:04:00Z","updatedAt":"2025-01-01T00:04:00Z","comment":{"id":"comment-3","issue":{"id":"issue-1"}},"user":{"id":"user-1","name":"Ada","displayName":"Ada Lovelace","email":"ada@example.com","isMe":true}}]}],"pageInfo":{"hasNextPage":false,"endCursor":"cursor-2"}}}}}`,
+	}
+	requestQueries := make([]string, 0, len(responses))
+	requestCursors := make([]interface{}, 0, len(responses))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Query     string                 `json:"query"`
+			Variables map[string]interface{} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		requestQueries = append(requestQueries, request.Query)
+		requestCursors = append(requestCursors, request.Variables["commentsAfter"])
+		if len(requestQueries) > len(responses) {
+			t.Fatalf("received %d requests, want %d", len(requestQueries), len(responses))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(responses[len(requestQueries)-1]))
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientConfig{Token: "test-token", Endpoint: server.URL})
+	issue, err := client.FetchIssueByID(context.Background(), "issue-1")
+	if err != nil {
+		t.Fatalf("FetchIssueByID() error: %v", err)
+	}
+	if len(issue.Comments) != 3 {
+		t.Fatalf("comments length = %d, want 3", len(issue.Comments))
+	}
+	if issue.Comments[0].ParentID != "" || issue.Comments[0].Parent != nil {
+		t.Fatalf("root parent = %#v, want nil", issue.Comments[0].Parent)
+	}
+	if issue.Comments[1].ParentID != "comment-1" || issue.Comments[1].Parent == nil || issue.Comments[1].Parent.ID != "comment-1" {
+		t.Fatalf("reply parent = %#v, want comment-1", issue.Comments[1].Parent)
+	}
+	if len(issue.Comments[0].Reactions) != 1 || issue.Comments[0].Reactions[0].ID != "reaction-1" || issue.Comments[0].Reactions[0].CommentID != "comment-1" || issue.Comments[0].Reactions[0].User.ID != "user-2" {
+		t.Fatalf("root reactions = %#v, want reaction-1/user-2", issue.Comments[0].Reactions)
+	}
+	if len(issue.Comments[2].Reactions) != 1 || issue.Comments[2].Reactions[0].ID != "reaction-3" || issue.Comments[2].Reactions[0].CommentID != "comment-3" {
+		t.Fatalf("orphan reactions = %#v, want reaction-3/comment-3", issue.Comments[2].Reactions)
+	}
+	if len(requestQueries) != 2 || requestCursors[0] != nil || requestCursors[1] != "cursor-1" {
+		t.Fatalf("request cursors = %#v, want [nil cursor-1]", requestCursors)
+	}
+	for _, query := range requestQueries {
+		for _, field := range []string{"parent", "reactions", "pageInfo", "after: $commentsAfter"} {
+			if !strings.Contains(query, field) {
+				t.Fatalf("query = %q, want %q", query, field)
+			}
+		}
+	}
+}
+
+func TestFetchIssueByIDRejectsMalformedCommentPagination(t *testing.T) {
+	response := `{"data":{"issue":{"id":"issue-1","identifier":"ABC-1","title":"Malformed","state":{"id":"state-1","name":"Todo"},"assignee":null,"priority":1,"updatedAt":"2025-01-01T00:00:00Z","createdAt":"2025-01-01T00:00:00Z","description":null,"team":{"id":"team-1"},"project":null,"labels":{"nodes":[]},"url":"https://linear.app/issue/ABC-1","archivedAt":null,"parent":null,"children":{"nodes":[]},"relations":{"nodes":[]},"inverseRelations":{"nodes":[]},"subscribers":{"nodes":[]},"attachments":{"nodes":[]},"comments":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":null}}}}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(response))
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientConfig{Token: "test-token", Endpoint: server.URL})
+	_, err := client.FetchIssueByID(context.Background(), "issue-1")
+	if err == nil || !strings.Contains(err.Error(), "no end cursor") {
+		t.Fatalf("FetchIssueByID() error = %v, want missing end cursor", err)
+	}
+}
+
+func TestCreateCommentPreservesParentAndReactions(t *testing.T) {
+	var request map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"commentCreate":{"success":true,"comment":{"id":"comment-2","body":"reply","createdAt":"2025-01-01T00:02:00Z","updatedAt":"2025-01-02T00:02:00Z","issueId":"issue-1","parent":{"id":"comment-1"},"user":{"id":"user-2","name":"Grace","displayName":"Grace Hopper","email":"grace@example.com","isMe":false},"reactions":[{"id":"reaction-2","emoji":"✅","createdAt":"2025-01-01T00:03:00Z","updatedAt":"2025-01-01T00:03:00Z","comment":{"id":"comment-2","issue":{"id":"issue-1"}},"user":{"id":"user-1","name":"Ada","displayName":"Ada Lovelace","email":"ada@example.com","isMe":true}}]}}}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientConfig{Token: "test-token", Endpoint: server.URL})
+	comment, err := client.CreateComment(context.Background(), CreateCommentInput{IssueID: "issue-1", Body: "reply"})
+	if err != nil {
+		t.Fatalf("CreateComment() error: %v", err)
+	}
+	if comment.ParentID != "comment-1" || comment.Parent == nil || comment.Parent.ID != "comment-1" {
+		t.Fatalf("parent = %#v, want comment-1", comment.Parent)
+	}
+	if len(comment.Reactions) != 1 || comment.Reactions[0].ID != "reaction-2" || comment.Reactions[0].CommentID != "comment-2" || comment.Reactions[0].User.ID != "user-1" {
+		t.Fatalf("reactions = %#v, want reaction-2/comment-2/user-1", comment.Reactions)
+	}
+	query, _ := request["query"].(string)
+	for _, field := range []string{"parent", "reactions"} {
+		if !strings.Contains(query, field) {
+			t.Fatalf("query = %q, want %q", query, field)
+		}
+	}
+}
+
 // TestFetchIssuesPage_NoNextPage verifies end cursor is cleared when pagination ends.
 func TestFetchIssuesPage_NoNextPage(t *testing.T) {
 	response := issuesPageResponse([]string{}, false, "cursor-ignored")
@@ -1488,6 +1590,54 @@ func TestUpdateIssue_SetsAndClearsCycleID(t *testing.T) {
 	}
 	if value, ok := inputs[1]["cycleId"]; !ok || value != nil {
 		t.Fatalf("clear cycleId = %#v (present=%v), want present null", value, ok)
+	}
+}
+
+func TestUpdateIssue_SetsClearsAndOmitsProjectID(t *testing.T) {
+	var inputs []map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var reqBody map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+			t.Fatalf("Failed to decode request body: %v", err)
+		}
+		variables, ok := reqBody["variables"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("Request body missing variables")
+		}
+		input, ok := variables["input"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("variables.input = %#v, want object", variables["input"])
+		}
+		inputs = append(inputs, input)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(mutationIssueResponse("issueUpdate")))
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientConfig{Token: "test-token", Endpoint: server.URL})
+	projectID := "project-1"
+	if _, err := client.UpdateIssue(context.Background(), UpdateIssueInput{ID: "issue-1", ProjectID: &projectID}); err != nil {
+		t.Fatalf("UpdateIssue(set project) error: %v", err)
+	}
+	clearProjectID := ""
+	if _, err := client.UpdateIssue(context.Background(), UpdateIssueInput{ID: "issue-1", ProjectID: &clearProjectID}); err != nil {
+		t.Fatalf("UpdateIssue(clear project) error: %v", err)
+	}
+	if _, err := client.UpdateIssue(context.Background(), UpdateIssueInput{ID: "issue-1"}); err != nil {
+		t.Fatalf("UpdateIssue(omit project) error: %v", err)
+	}
+
+	if len(inputs) != 3 {
+		t.Fatalf("inputs length = %d, want 3", len(inputs))
+	}
+	if got := inputs[0]["projectId"]; got != "project-1" {
+		t.Fatalf("set projectId = %#v, want project-1", got)
+	}
+	if got, ok := inputs[1]["projectId"]; !ok || got != nil {
+		t.Fatalf("clear projectId = %#v (present=%v), want present null", got, ok)
+	}
+	if _, ok := inputs[2]["projectId"]; ok {
+		t.Fatalf("no-change projectId unexpectedly present: %#v", inputs[2])
 	}
 }
 

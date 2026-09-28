@@ -101,7 +101,7 @@ func TestApplyDefaultNavigationSelectsTeam(t *testing.T) {
 	app := newDefaultNavTestApp(config.Config{DefaultTeam: "nex"})
 	refreshDone := installRefreshCompletionHook(app)
 	teams := defaultNavTeams()
-	app.rebuildNavigationTree(teams)
+	app.rebuildNavigationTree(teams, nil)
 
 	app.applyDefaultNavigation(context.Background(), teams)
 	waitForRefreshCompletion(t, refreshDone)
@@ -126,7 +126,7 @@ func TestApplyDefaultNavigationSelectsProject(t *testing.T) {
 	app := newDefaultNavTestApp(config.Config{DefaultTeam: "NEX", DefaultProject: "website"})
 	refreshDone := installRefreshCompletionHook(app)
 	teams := defaultNavTeams()
-	app.rebuildNavigationTree(teams)
+	app.rebuildNavigationTree(teams, nil)
 
 	app.applyDefaultNavigation(context.Background(), teams)
 	waitForRefreshCompletion(t, refreshDone)
@@ -143,7 +143,7 @@ func TestApplyDefaultNavigationSelectsProject(t *testing.T) {
 func TestApplyDefaultNavigationUnknownTeamKeepsAllIssues(t *testing.T) {
 	app := newDefaultNavTestApp(config.Config{DefaultTeam: "MISSING"})
 	teams := defaultNavTeams()
-	app.rebuildNavigationTree(teams)
+	app.rebuildNavigationTree(teams, nil)
 
 	app.applyDefaultNavigation(context.Background(), teams)
 
@@ -160,7 +160,7 @@ func TestApplyDefaultNavigationUnknownProjectSelectsTeam(t *testing.T) {
 	app := newDefaultNavTestApp(config.Config{DefaultTeam: "NEX", DefaultProject: "Missing"})
 	refreshDone := installRefreshCompletionHook(app)
 	teams := defaultNavTeams()
-	app.rebuildNavigationTree(teams)
+	app.rebuildNavigationTree(teams, nil)
 
 	app.applyDefaultNavigation(context.Background(), teams)
 	waitForRefreshCompletion(t, refreshDone)
@@ -181,7 +181,7 @@ func TestApplyDefaultNavigationProjectFetchFailureIsNotReportedAsMissing(t *test
 	}
 	refreshDone := installRefreshCompletionHook(app)
 	teams := defaultNavTeams()
-	app.rebuildNavigationTree(teams)
+	app.rebuildNavigationTree(teams, nil)
 
 	app.applyDefaultNavigation(context.Background(), teams)
 	waitForRefreshCompletion(t, refreshDone)
@@ -201,7 +201,7 @@ func TestApplyDefaultNavigationWarnsWhenProjectCannotBeAppliedAfterPartialLoadFa
 	}
 	refreshDone := installRefreshCompletionHook(app)
 	teams := defaultNavTeams()
-	app.rebuildNavigationTree(teams)
+	app.rebuildNavigationTree(teams, nil)
 
 	app.applyDefaultNavigation(context.Background(), teams)
 	waitForRefreshCompletion(t, refreshDone)
@@ -219,7 +219,7 @@ func TestApplyDefaultNavigationWarnsWhenProjectCannotBeAppliedAfterPartialLoadFa
 func TestApplyDefaultNavigationNoDefaultsIsNoop(t *testing.T) {
 	app := newDefaultNavTestApp(config.Config{})
 	teams := defaultNavTeams()
-	app.rebuildNavigationTree(teams)
+	app.rebuildNavigationTree(teams, nil)
 
 	app.applyDefaultNavigation(context.Background(), teams)
 

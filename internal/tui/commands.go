@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/roeyazroel/linear-tui/internal/agents"
 	"github.com/roeyazroel/linear-tui/internal/linearapi"
@@ -131,22 +132,251 @@ func handleAskAgent(a *App) {
 	})
 }
 
-func runIssueUpdateCommand(a *App, issue *linearapi.Issue, input linearapi.UpdateIssueInput, logAction, successMessage string) {
-	input.ID = issue.ID
-	go func() {
-		ctx := context.Background()
-		_, err := a.GetAPI().UpdateIssue(ctx, input)
-		a.QueueUpdateDraw(func() {
-			if err != nil {
-				logger.ErrorWithErr(err, "tui.commands: failed to %s issue=%s", logAction, issue.Identifier)
-				a.updateStatusBarWithError(err)
-				return
-			}
-			logger.Info("tui.commands: %s issue=%s", logAction, issue.Identifier)
-			a.flashStatus(successMessage)
-			go a.refreshIssues(issue.ID)
+// effectiveIssueTargetIDs snapshots the current selection for a command. A
+// mark set takes precedence over the cursor; otherwise the selected/cursor
+// issue is the sole target.
+func (a *App) effectiveIssueTargetIDs() []string {
+	cursorID := ""
+	selectedIssue := a.GetSelectedIssue()
+	if selectedIssue != nil {
+		cursorID = selectedIssue.ID
+	}
+	if cursorID == "" {
+		_, section := a.activeIssuesTable()
+		cursorID = a.cursorIssueID(section)
+	}
+	targetIDs := a.markedIssueSelection.EffectiveTargets(cursorID)
+	resolved := a.resolveIssueTargetIDs(targetIDs)
+	// A selected issue may be a freshly fetched detail that is not yet in the
+	// table's loaded slice. Preserve that cursor target for single-issue
+	// commands; marked targets still require reconciliation and are ignored when
+	// stale.
+	if len(resolved) == 0 && a.markedIssueSelection.Count() == 0 && selectedIssue != nil && selectedIssue.ID == cursorID {
+		return []string{selectedIssue.ID}
+	}
+	return resolved
+}
+
+func navigationMutationKey(node *NavigationNode) string {
+	if node == nil {
+		return ""
+	}
+	return strings.Join([]string{
+		node.ID,
+		node.TeamID,
+		node.CustomViewID,
+		node.StateType,
+		node.StateID,
+		node.CycleID,
+	}, "\x00")
+}
+
+func sameStringSlices(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *App) resolveCommandTargets(issueIDs []string) []linearapi.Issue {
+	targets := a.resolveIssueTargets(issueIDs)
+	if len(targets) == 0 && a.markedIssueSelection.Count() == 0 && len(issueIDs) == 1 {
+		if issue := a.GetSelectedIssue(); issue != nil && issue.ID == issueIDs[0] {
+			return []linearapi.Issue{*issue}
+		}
+	}
+	return targets
+}
+
+// runBulkIssueAction executes a mutation off the UI goroutine, emits progress
+// through the status bar, and performs exactly one refresh when all targets
+// have completed. Successful marks are removed on partial failure while failed
+// marks remain available for retry.
+func (a *App) runBulkIssueAction(action string, issueIDs []string, mutate func(context.Context, string) error) {
+	issueIDs = a.resolveIssueTargetIDs(issueIDs)
+	if len(issueIDs) == 0 && a.markedIssueSelection.Count() == 0 {
+		if issue := a.GetSelectedIssue(); issue != nil {
+			issueIDs = []string{issue.ID}
+		}
+	}
+	if len(issueIDs) == 0 {
+		a.flashStatus("No issue selected")
+		return
+	}
+	ids := append([]string(nil), issueIDs...)
+	snapshot := a.bulkIssueMutationSnapshot(ids)
+	runner := a.bulkIssueActionRunner
+	if runner == nil {
+		runner = NewAsyncViewActionRunner(a.QueueUpdateDraw, AsyncViewActionHooks{
+			OnProgress: func(_, message string) {
+				if strings.TrimSpace(message) == "" {
+					return
+				}
+				a.statusMessage = message
+				a.updateStatusBar()
+			},
+			OnError: func(_ string, err error) {
+				if err != nil {
+					a.updateStatusBarWithError(err)
+				}
+			},
 		})
-	}()
+		a.bulkIssueActionRunner = runner
+	}
+	if runner.InFlight() {
+		a.updateStatusBarWithError(fmt.Errorf("another bulk issue action is already in progress"))
+		return
+	}
+	a.statusMessage = fmt.Sprintf("%s: 0/%d", action, len(ids))
+	a.updateStatusBar()
+	var summary BulkActionSummary
+	var summaryMu sync.Mutex
+	accepted := runner.RunResult("Bulk "+action, func(ctx context.Context) error {
+		result := RunBulkAction(ctx, ids, 4, mutate, func(progress BulkActionProgress) {
+			runner.Progress(fmt.Sprintf("%s: %d/%d", action, progress.Completed, progress.Total))
+		})
+		summaryMu.Lock()
+		summary = result
+		summaryMu.Unlock()
+		return nil
+	}, func(result AsyncViewActionResult) {
+		if result.Err != nil || !a.bulkIssueMutationContextCurrent(snapshot) {
+			return
+		}
+		summaryMu.Lock()
+		final := summary
+		summaryMu.Unlock()
+		a.finishBulkIssueAction(action, ids, snapshot, final)
+	})
+	if !accepted && a.pages != nil {
+		a.updateStatusBarWithError(fmt.Errorf("another bulk issue action is already in progress"))
+	}
+}
+
+type bulkIssueMutationSnapshot struct {
+	targetIDs           []string
+	markedIDs           []string
+	navigationKey       string
+	selectionGeneration int64
+}
+
+func (a *App) bulkIssueMutationSnapshot(targetIDs []string) bulkIssueMutationSnapshot {
+	snapshot := bulkIssueMutationSnapshot{
+		targetIDs:           append([]string(nil), targetIDs...),
+		markedIDs:           a.markedIssueSelection.IDs(),
+		navigationKey:       navigationMutationKey(a.selectedNavigation),
+		selectionGeneration: a.issueSelectionGeneration.Load(),
+	}
+	return snapshot
+}
+
+func (a *App) bulkIssueMutationContextCurrent(snapshot bulkIssueMutationSnapshot) bool {
+	if a == nil || navigationMutationKey(a.selectedNavigation) != snapshot.navigationKey {
+		return false
+	}
+	if !sameStringSlices(a.markedIssueSelection.IDs(), snapshot.markedIDs) {
+		return false
+	}
+	if a.issueSelectionGeneration.Load() != snapshot.selectionGeneration {
+		return false
+	}
+	currentTargets := a.effectiveIssueTargetIDs()
+	if len(currentTargets) == 0 {
+		// A successful refresh can temporarily clear the lightweight selected
+		// issue before the next page is applied. The explicit selection
+		// generation above still distinguishes a user selection change, so an
+		// empty transient target set is not itself stale.
+		return true
+	}
+	return sameStringSlices(currentTargets, snapshot.targetIDs)
+}
+
+func (a *App) finishBulkIssueAction(action string, targetIDs []string, snapshot bulkIssueMutationSnapshot, summary BulkActionSummary) {
+	if !a.bulkIssueMutationContextCurrent(snapshot) {
+		return
+	}
+	if summary.Failed == 0 {
+		a.markedIssueSelection.Clear()
+		if len(targetIDs) == 1 {
+			if issue := a.issueForLoadedID(targetIDs[0]); issue != nil {
+				message := ""
+				switch action {
+				case "Archive":
+					message = fmt.Sprintf("Archived %s", issue.Identifier)
+				case "Change status":
+					message = fmt.Sprintf("Changed status for %s", issue.Identifier)
+				case "Assign user":
+					message = fmt.Sprintf("Assigned %s", issue.Identifier)
+				case "Set cycle":
+					message = fmt.Sprintf("Set cycle for %s", issue.Identifier)
+				}
+				if message != "" {
+					a.flashStatus(message)
+				} else {
+					a.flashStatus(fmt.Sprintf("%s: %d succeeded", action, summary.Succeeded))
+				}
+			} else {
+				a.flashStatus(fmt.Sprintf("%s: %d succeeded", action, summary.Succeeded))
+			}
+		} else {
+			a.flashStatus(fmt.Sprintf("%s: %d succeeded", action, summary.Succeeded))
+		}
+	} else {
+		failedIDs := make(map[string]struct{}, summary.Failed)
+		for _, result := range summary.Results {
+			if result.Err != nil {
+				failedIDs[result.IssueID] = struct{}{}
+				if issue := a.issueForLoadedID(result.IssueID); issue != nil {
+					logger.ErrorWithErr(result.Err, "tui.commands: bulk %s failed issue=%s", action, issue.Identifier)
+				} else {
+					logger.ErrorWithErr(result.Err, "tui.commands: bulk %s failed issue_id=%s", action, result.IssueID)
+				}
+			}
+		}
+		for _, issueID := range targetIDs {
+			if _, failed := failedIDs[issueID]; failed {
+				if !a.markedIssueSelection.IsMarked(issueID) {
+					a.markedIssueSelection.Toggle(issueID)
+				}
+				continue
+			}
+			if a.markedIssueSelection.IsMarked(issueID) {
+				a.markedIssueSelection.Toggle(issueID)
+			}
+		}
+		firstFailure := ""
+		for _, result := range summary.Results {
+			if result.Err != nil {
+				firstFailure = result.Err.Error()
+				break
+			}
+		}
+		a.flashStatus(fmt.Sprintf("%s: %d succeeded, %d failed (first failure: %s)", action, summary.Succeeded, summary.Failed, firstFailure))
+	}
+	a.refreshIssueTableMarks()
+	// Refresh only after the complete batch. Individual mutations never invoke
+	// refreshIssues, which keeps network/UI work bounded to one final refresh.
+	go a.refreshIssues()
+}
+
+func (a *App) issueForLoadedID(issueID string) *linearapi.Issue {
+	if issueID == "" {
+		return nil
+	}
+	a.issuesMu.RLock()
+	defer a.issuesMu.RUnlock()
+	for i := range a.issues {
+		if a.issues[i].ID == issueID {
+			issue := a.issues[i]
+			return &issue
+		}
+	}
+	return nil
 }
 
 func handleOpenBrowserCommand(a *App) {
@@ -208,6 +438,32 @@ func handleCopyIssueURLCommand(a *App) {
 	a.flashStatus(fmt.Sprintf("Copied issue URL: %s", issue.Identifier))
 }
 
+func handleAssignMeCommand(a *App) {
+	issue := a.GetSelectedIssue()
+	user := a.GetCurrentUser()
+	if issue == nil || user == nil {
+		a.flashStatus("No issue or current user selected")
+		return
+	}
+	go func() {
+		ctx := context.Background()
+		_, err := a.GetAPI().UpdateIssue(ctx, linearapi.UpdateIssueInput{
+			ID:         issue.ID,
+			AssigneeID: &user.ID,
+		})
+		a.QueueUpdateDraw(func() {
+			if err != nil {
+				logger.ErrorWithErr(err, "tui.commands: failed to assign issue issue=%s user=%s", issue.Identifier, user.DisplayName)
+				a.updateStatusBarWithError(err)
+				return
+			}
+			logger.Info("tui.commands: assigned issue issue=%s user=%s", issue.Identifier, user.DisplayName)
+			a.flashStatus(fmt.Sprintf("Assigned %s to %s", issue.Identifier, user.DisplayName))
+			go a.refreshIssues(issue.ID)
+		})
+	}()
+}
+
 // DefaultCommands returns the default set of commands for the palette.
 func DefaultCommands(app *App) []Command {
 	lookPath := exec.LookPath
@@ -217,6 +473,54 @@ func DefaultCommands(app *App) []Command {
 	availableProviders := agents.AvailableProviderKeys(lookPath)
 
 	commands := []Command{
+		{
+			ID:       "open_triage",
+			Title:    "Open triage",
+			Keywords: []string{"triage", "notifications", "workflow"},
+			Run: func(a *App) {
+				a.runKeySequenceCommand("navigate_triage")
+			},
+		},
+		{
+			ID:       "open_favorites",
+			Title:    "Open favorites",
+			Keywords: []string{"favorites", "starred", "sidebar"},
+			Run: func(a *App) {
+				a.runKeySequenceCommand("navigate_favorites")
+			},
+		},
+		{
+			ID:       "open_saved_views",
+			Title:    "Manage saved views",
+			Keywords: []string{"saved", "views", "custom", "view", "filter"},
+			Run: func(a *App) {
+				a.openSavedViews()
+			},
+		},
+		{
+			ID:       "open_inbox",
+			Title:    "Open inbox",
+			Keywords: []string{"inbox", "notifications", "mentions", "activity"},
+			Run: func(a *App) {
+				a.openInbox()
+			},
+		},
+		{
+			ID:       "open_comments",
+			Title:    "Open issue comments/activity",
+			Keywords: []string{"comments", "activity", "thread", "replies"},
+			Run: func(a *App) {
+				a.openCommentsModal()
+			},
+		},
+		{
+			ID:       "open_roadmap",
+			Title:    "Open initiatives roadmap",
+			Keywords: []string{"roadmap", "initiatives", "projects", "updates"},
+			Run: func(a *App) {
+				a.openRoadmap()
+			},
+		},
 		{
 			ID:           "refresh",
 			Title:        "Refresh issues",
@@ -504,31 +808,7 @@ func DefaultCommands(app *App) []Command {
 			Title:        "Assign to me",
 			Keywords:     []string{"assign", "me", "self", "take"},
 			ShortcutRune: 'm',
-			Run: func(a *App) {
-				issue := a.GetSelectedIssue()
-				user := a.GetCurrentUser()
-				if issue == nil || user == nil {
-					a.flashStatus("No issue or current user selected")
-					return
-				}
-				go func() {
-					ctx := context.Background()
-					_, err := a.GetAPI().UpdateIssue(ctx, linearapi.UpdateIssueInput{
-						ID:         issue.ID,
-						AssigneeID: &user.ID,
-					})
-					a.QueueUpdateDraw(func() {
-						if err != nil {
-							logger.ErrorWithErr(err, "tui.commands: failed to assign issue issue=%s user=%s", issue.Identifier, user.DisplayName)
-							a.updateStatusBarWithError(err)
-							return
-						}
-						logger.Info("tui.commands: assigned issue issue=%s user=%s", issue.Identifier, user.DisplayName)
-						a.flashStatus(fmt.Sprintf("Assigned %s to %s", issue.Identifier, user.DisplayName))
-						go a.refreshIssues(issue.ID)
-					})
-				}()
-			},
+			Run:          handleAssignMeCommand,
 		},
 		{
 			ID:           "unassign",
@@ -567,31 +847,28 @@ func DefaultCommands(app *App) []Command {
 			Keywords:     []string{"archive", "delete", "remove"},
 			ShortcutRune: 'x',
 			Run: func(a *App) {
-				issue := a.GetSelectedIssue()
-				if issue == nil {
+				targetIDs := a.effectiveIssueTargetIDs()
+				targets := a.resolveCommandTargets(targetIDs)
+				if len(targets) == 0 {
 					a.flashStatus("No issue selected")
 					return
 				}
+				message := ""
+				if len(targets) == 1 {
+					message = fmt.Sprintf("Archive %s - %s?", targets[0].Identifier, targets[0].Title)
+				} else {
+					message = fmt.Sprintf("Archive %d marked issues?", len(targets))
+				}
 				a.confirmationModal.Show(
 					"Archive Issue",
-					fmt.Sprintf("Archive %s - %s?", issue.Identifier, issue.Title),
+					message,
 					"Archive",
 					func() {
-						go func() {
-							ctx := context.Background()
-							err := a.GetAPI().ArchiveIssue(ctx, issue.ID)
-							a.QueueUpdateDraw(func() {
-								if err != nil {
-									logger.ErrorWithErr(err, "tui.commands: failed to archive issue issue=%s", issue.Identifier)
-									a.updateStatusBarWithError(err)
-									return
-								}
-								logger.Info("tui.commands: archived issue issue=%s", issue.Identifier)
-								a.flashStatus(fmt.Sprintf("Archived %s", issue.Identifier))
-								// After archiving, the issue won't be in the list, so just refresh without ID
-								go a.refreshIssues()
-							})
-						}()
+						archiveIssue := a.archiveIssueFunc
+						if archiveIssue == nil {
+							archiveIssue = a.GetAPI().ArchiveIssue
+						}
+						a.runBulkIssueAction("Archive", targetIDs, archiveIssue)
 					},
 				)
 			},
@@ -602,29 +879,20 @@ func DefaultCommands(app *App) []Command {
 			Keywords:     []string{"status", "state", "workflow", "todo", "progress", "done"},
 			ShortcutRune: 's',
 			Run: func(a *App) {
-				issue := a.GetSelectedIssue()
-				if issue == nil {
+				targetIDs := a.effectiveIssueTargetIDs()
+				if len(targetIDs) == 0 {
 					a.flashStatus("No issue selected")
 					return
 				}
 				a.ShowStatusPicker(func(stateID string) {
-					go func() {
-						ctx := context.Background()
-						_, err := a.GetAPI().UpdateIssue(ctx, linearapi.UpdateIssueInput{
-							ID:      issue.ID,
-							StateID: &stateID,
-						})
-						a.QueueUpdateDraw(func() {
-							if err != nil {
-								logger.ErrorWithErr(err, "tui.commands: failed to change status issue=%s", issue.Identifier)
-								a.updateStatusBarWithError(err)
-								return
-							}
-							logger.Info("tui.commands: changed status issue=%s", issue.Identifier)
-							a.flashStatus(fmt.Sprintf("Changed status for %s", issue.Identifier))
-							go a.refreshIssues(issue.ID)
-						})
-					}()
+					updateIssue := a.updateIssueFunc
+					if updateIssue == nil {
+						updateIssue = a.GetAPI().UpdateIssue
+					}
+					a.runBulkIssueAction("Change status", targetIDs, func(ctx context.Context, issueID string) error {
+						_, err := updateIssue(ctx, linearapi.UpdateIssueInput{ID: issueID, StateID: &stateID})
+						return err
+					})
 				})
 			},
 		},
@@ -634,13 +902,20 @@ func DefaultCommands(app *App) []Command {
 			Keywords:     []string{"cycle", "sprint", "iteration", "set"},
 			ShortcutRune: 'c',
 			Run: func(a *App) {
-				issue := a.GetSelectedIssue()
-				if issue == nil {
+				targetIDs := a.effectiveIssueTargetIDs()
+				if len(targetIDs) == 0 {
 					a.flashStatus("No issue selected")
 					return
 				}
 				a.ShowCyclePicker(func(cycleID string) {
-					runIssueUpdateCommand(a, issue, linearapi.UpdateIssueInput{CycleID: &cycleID}, "set cycle", fmt.Sprintf("Set cycle for %s", issue.Identifier))
+					updateIssue := a.updateIssueFunc
+					if updateIssue == nil {
+						updateIssue = a.GetAPI().UpdateIssue
+					}
+					a.runBulkIssueAction("Set cycle", targetIDs, func(ctx context.Context, issueID string) error {
+						_, err := updateIssue(ctx, linearapi.UpdateIssueInput{ID: issueID, CycleID: &cycleID})
+						return err
+					})
 				})
 			},
 		},
@@ -684,13 +959,20 @@ func DefaultCommands(app *App) []Command {
 			Keywords:     []string{"assign", "user", "team", "member"},
 			ShortcutRune: 'a',
 			Run: func(a *App) {
-				issue := a.GetSelectedIssue()
-				if issue == nil {
+				targetIDs := a.effectiveIssueTargetIDs()
+				if len(targetIDs) == 0 {
 					a.flashStatus("No issue selected")
 					return
 				}
 				a.ShowUserPicker(func(userID string) {
-					runIssueUpdateCommand(a, issue, linearapi.UpdateIssueInput{AssigneeID: &userID}, "assign issue to user", fmt.Sprintf("Assigned %s", issue.Identifier))
+					updateIssue := a.updateIssueFunc
+					if updateIssue == nil {
+						updateIssue = a.GetAPI().UpdateIssue
+					}
+					a.runBulkIssueAction("Assign user", targetIDs, func(ctx context.Context, issueID string) error {
+						_, err := updateIssue(ctx, linearapi.UpdateIssueInput{ID: issueID, AssigneeID: &userID})
+						return err
+					})
 				})
 			},
 		},
@@ -709,6 +991,18 @@ func DefaultCommands(app *App) []Command {
 			},
 		},
 		{
+			ID:       "edit_issue",
+			Title:    "Edit issue",
+			Keywords: []string{"edit", "issue", "title", "description", "status", "assignee", "priority", "project", "cycle", "labels"},
+			Run: func(a *App) {
+				if a.GetSelectedIssue() == nil {
+					a.flashStatus("No issue selected")
+					return
+				}
+				a.ShowIssueEditorModal()
+			},
+		},
+		{
 			ID:           "edit_title",
 			Title:        "Edit issue title",
 			Keywords:     []string{"edit", "title", "rename"},
@@ -723,10 +1017,9 @@ func DefaultCommands(app *App) []Command {
 			},
 		},
 		{
-			ID:           "edit_labels",
-			Title:        "Edit issue labels",
-			Keywords:     []string{"labels", "label", "tag", "tags"},
-			ShortcutRune: 'g', // 'g' for tags (since 'l' is used for vim navigation)
+			ID:       "edit_labels",
+			Title:    "Edit issue labels",
+			Keywords: []string{"labels", "label", "tag", "tags"},
 			Run: func(a *App) {
 				issue := a.GetSelectedIssue()
 				if issue == nil {
@@ -824,8 +1117,8 @@ func DefaultCommands(app *App) []Command {
 					}
 				}
 
-				renderIssuesTableModel(a.myIssuesTable, a.myIssueRows, a.myIDToIssue, selectedMyIssueID, a.theme)
-				renderIssuesTableModel(a.otherIssuesTable, a.otherIssueRows, a.otherIDToIssue, selectedOtherIssueID, a.theme)
+				renderIssuesTableModel(a.myIssuesTable, a.myIssueRows, a.myIDToIssue, selectedMyIssueID, a.theme, &a.markedIssueSelection)
+				renderIssuesTableModel(a.otherIssuesTable, a.otherIssueRows, a.otherIDToIssue, selectedOtherIssueID, a.theme, &a.markedIssueSelection)
 			},
 		},
 		{
@@ -877,8 +1170,8 @@ func DefaultCommands(app *App) []Command {
 					}
 				}
 
-				renderIssuesTableModel(a.myIssuesTable, a.myIssueRows, a.myIDToIssue, selectedMyIssueID, a.theme)
-				renderIssuesTableModel(a.otherIssuesTable, a.otherIssueRows, a.otherIDToIssue, selectedOtherIssueID, a.theme)
+				renderIssuesTableModel(a.myIssuesTable, a.myIssueRows, a.myIDToIssue, selectedMyIssueID, a.theme, &a.markedIssueSelection)
+				renderIssuesTableModel(a.otherIssuesTable, a.otherIssueRows, a.otherIDToIssue, selectedOtherIssueID, a.theme, &a.markedIssueSelection)
 			},
 		},
 		{
@@ -1000,6 +1293,46 @@ func DefaultCommands(app *App) []Command {
 			filtered = append(filtered, command)
 		}
 		commands = filtered
+	}
+	if app != nil && app.isTriageContext() {
+		commands = append(commands,
+			Command{
+				ID:       "triage_accept",
+				Title:    "Accept triage issue",
+				Keywords: []string{"triage", "accept", "status", "workflow"},
+				Run: func(a *App) {
+					a.runTriageAcceptCommand()
+				},
+			},
+			Command{
+				ID:       "triage_duplicate",
+				Title:    "Mark triage issue as duplicate",
+				Keywords: []string{"triage", "duplicate", "relation", "mark"},
+				Run: func(a *App) {
+					a.runTriageDuplicateCommand()
+				},
+			},
+			Command{
+				ID:       "triage_decline",
+				Title:    "Decline triage issue",
+				Keywords: []string{"triage", "decline", "archive", "dismiss"},
+				Run: func(a *App) {
+					a.runTriageDeclineCommand()
+				},
+			},
+			Command{
+				ID:       "triage_snooze",
+				Title:    "Snooze triage notification",
+				Keywords: []string{"triage", "snooze", "notification", "later"},
+				Run: func(a *App) {
+					a.runTriageSnoozeCommand()
+				},
+			},
+		)
+	}
+
+	if app != nil {
+		applyCommandKeybindings(commands, app.config.Keybindings)
 	}
 	return commands
 }

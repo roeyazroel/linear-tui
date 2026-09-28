@@ -95,6 +95,11 @@ type Config struct {
 	// AgentWorkspace is the default workspace path for agent runs.
 	AgentWorkspace string
 
+	// Keybindings remaps palette command shortcuts and UI action keys by id.
+	// Values are single keys except for the built-in navigate_* actions, which
+	// may use space-separated navigation chords.
+	Keybindings map[string]string
+
 	// DefaultTeam selects the team (by key or name) to open on startup.
 	DefaultTeam string
 
