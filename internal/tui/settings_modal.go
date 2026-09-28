@@ -1,10 +1,13 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -14,12 +17,19 @@ import (
 )
 
 const (
-	defaultAgentModelLabel       = "default (use provider default)"
+	defaultAgentModelLabel      = "default (use provider default)"
+	cursorModelDiscoveryTimeout = 1 * time.Second
+	cursorModelWaitDelay        = 250 * time.Millisecond
+	// Retry a transient fallback after 30s so a newly installed or recovered
+	// cursor-agent can be discovered without imposing repeated startup probes.
+	cursorModelFallbackCacheTTL  = 30 * time.Second
 	settingsModalWidth           = 110
 	settingsModalScreenMargin    = 4
 	settingsModalHeaderFooterRow = 2
 	settingsFormItemPadding      = 1
 	settingsFormBorderPadding    = 1
+	settingsWideFieldWidth       = 40
+	settingsKeybindingsPageName  = "settings_keybindings"
 )
 
 // agentModelOption pairs a model id with its display label.
@@ -28,13 +38,38 @@ type agentModelOption struct {
 	label string
 }
 
+type cursorModelOptionsCache struct {
+	mu         sync.Mutex
+	options    []agentModelOption
+	fallbackAt time.Time
+}
+
+var cursorModelCache cursorModelOptionsCache
+
 // cursorModelOptions returns Cursor model options, preferring the CLI list.
 func cursorModelOptions() []agentModelOption {
+	cursorModelCache.mu.Lock()
+	defer cursorModelCache.mu.Unlock()
+	if len(cursorModelCache.options) > 0 {
+		return cloneAgentModelOptions(cursorModelCache.options)
+	}
+	if !cursorModelCache.fallbackAt.IsZero() && time.Since(cursorModelCache.fallbackAt) < cursorModelFallbackCacheTTL {
+		return cursorModelFallbackOptions()
+	}
+
 	options, err := cursorModelOptionsFromCLI()
 	if err == nil && len(options) > 0 {
-		return options
+		cursorModelCache.options = cloneAgentModelOptions(options)
+		cursorModelCache.fallbackAt = time.Time{}
+		return cloneAgentModelOptions(cursorModelCache.options)
 	}
+	cursorModelCache.options = nil
+	cursorModelCache.fallbackAt = time.Now()
 	return cursorModelFallbackOptions()
+}
+
+func cloneAgentModelOptions(options []agentModelOption) []agentModelOption {
+	return append([]agentModelOption(nil), options...)
 }
 
 // cursorModelFallbackOptions returns a static fallback list for Cursor models.
@@ -71,8 +106,15 @@ func cursorModelOptionsFromCLI() ([]agentModelOption, error) {
 	if err != nil {
 		return nil, err
 	}
-	output, err := exec.Command(binary, "--list-models").CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), cursorModelDiscoveryTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary, "--list-models")
+	cmd.WaitDelay = cursorModelWaitDelay
+	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
 		logger.Debug("tui.settings: failed to list cursor models binary=%s error=%v", binary, err)
 		return nil, fmt.Errorf("list models: %w", err)
 	}
@@ -243,6 +285,15 @@ type SettingsModal struct {
 	agentWorkspaceField  *tview.InputField
 	defaultTeamField     *tview.InputField
 	defaultProjectField  *tview.InputField
+
+	keybindingEntries    []KeybindingSetting
+	keybindingDraft      map[string]string
+	keybindingEditorBase map[string]string
+	keybindingList       *tview.List
+	keybindingInput      *tview.InputField
+	keybindingStatus     *tview.TextView
+	keybindingEditor     *tview.Flex
+	keybindingSelectedID string
 }
 
 // NewSettingsModal creates a new settings modal.
@@ -261,7 +312,9 @@ func NewSettingsModal(app *App) *SettingsModal {
 		agentSandboxOptions:  []string{"enabled", "disabled"},
 		agentModelOptions:    modelLabels,
 		agentModelValues:     modelValues,
+		keybindingEntries:    DefaultKeybindingSettings(),
 	}
+	sm.keybindingDraft = cloneKeybindingMap(app.config.Keybindings)
 
 	sm.form = tview.NewForm()
 	sm.form.SetItemPadding(settingsFormItemPadding)
@@ -282,7 +335,7 @@ func NewSettingsModal(app *App) *SettingsModal {
 
 	sm.endpointField = tview.NewInputField().
 		SetLabel("API endpoint").
-		SetFieldWidth(60)
+		SetFieldWidth(settingsWideFieldWidth)
 	sm.form.AddFormItem(sm.endpointField)
 
 	sm.timeoutField = tview.NewInputField().
@@ -307,7 +360,7 @@ func NewSettingsModal(app *App) *SettingsModal {
 
 	sm.logFileField = tview.NewInputField().
 		SetLabel("Log file").
-		SetFieldWidth(60)
+		SetFieldWidth(settingsWideFieldWidth)
 	sm.form.AddFormItem(sm.logFileField)
 
 	sm.logLevelField = tview.NewDropDown().
@@ -375,7 +428,7 @@ func NewSettingsModal(app *App) *SettingsModal {
 
 	sm.agentWorkspaceField = tview.NewInputField().
 		SetLabel("Agent workspace (optional; blank uses CWD)").
-		SetFieldWidth(60)
+		SetFieldWidth(settingsWideFieldWidth)
 	sm.form.AddFormItem(sm.agentWorkspaceField)
 
 	sm.defaultTeamField = tview.NewInputField().
@@ -388,6 +441,9 @@ func NewSettingsModal(app *App) *SettingsModal {
 		SetFieldWidth(40)
 	sm.form.AddFormItem(sm.defaultProjectField)
 
+	sm.form.AddButton("Configure keys", func() {
+		sm.OpenKeybindingEditor()
+	})
 	sm.form.AddButton("Save", func() {
 		sm.saveSettings()
 	})
@@ -401,7 +457,7 @@ func NewSettingsModal(app *App) *SettingsModal {
 	titleView.SetBackgroundColor(app.theme.HeaderBg)
 
 	helpView := tview.NewTextView()
-	helpView.SetText("Tab: next field | Enter: open dropdown | Esc: cancel")
+	helpView.SetText("Tab: next field | Enter: open dropdown | Configure keys: edit shortcuts | Esc: cancel")
 	helpView.SetTextColor(app.theme.SecondaryText)
 	helpView.SetBackgroundColor(app.theme.HeaderBg)
 	helpView.SetTextAlign(tview.AlignCenter)
@@ -431,6 +487,12 @@ func NewSettingsModal(app *App) *SettingsModal {
 		AddItem(sm.modalBody, settingsModalWidth, 0, true).
 		AddItem(nil, 0, 1, false)
 	sm.modal.SetBackgroundColor(app.theme.Background)
+	sm.modal.SetDrawFunc(func(_ tcell.Screen, x, y, width, height int) (int, int, int, int) {
+		modalWidth := workspaceModalWidth(width, settingsModalWidth)
+		sm.modal.ResizeItem(sm.modalBody, modalWidth, 0)
+		sm.resizeFormFields(modalWidth)
+		return x, y, width, height
+	})
 
 	return sm
 }
@@ -439,6 +501,9 @@ func NewSettingsModal(app *App) *SettingsModal {
 func (sm *SettingsModal) Show() {
 	logger.Debug("tui.settings: showing settings modal")
 	settings := config.SettingsFromConfig(sm.app.config)
+	sm.keybindingDraft = cloneKeybindingMap(settings.Keybindings)
+	sm.keybindingEditorBase = nil
+	sm.keybindingSelectedID = ""
 	availableProviders := agents.AvailableProviderKeys(exec.LookPath)
 	sm.setAgentProviderOptions(availableProviders)
 	selectedProvider := selectAvailableProvider(settings.AgentProvider, availableProviders)
@@ -460,10 +525,81 @@ func (sm *SettingsModal) Show() {
 	sm.defaultTeamField.SetText(settings.DefaultTeam)
 	sm.defaultProjectField.SetText(settings.DefaultProject)
 
+	sm.updateModalWidth()
 	sm.updateModalHeight()
 	sm.app.pages.AddPage("settings", sm.modal, true, true)
 	sm.app.pages.SendToFront("settings")
 	sm.app.app.SetFocus(sm.form)
+}
+
+func (sm *SettingsModal) updateModalWidth() {
+	if sm == nil || sm.modal == nil || sm.modalBody == nil {
+		return
+	}
+	modalWidth := sm.settingsModalWidth()
+	sm.modal.ResizeItem(sm.modalBody, modalWidth, 0)
+	sm.resizeFormFields(modalWidth)
+}
+
+// resizeFormFields keeps the form's shared label column and every fixed-width
+// field inside the settings frame on narrow terminals.
+func (sm *SettingsModal) resizeFormFields(modalWidth int) {
+	if sm == nil || sm.app == nil {
+		return
+	}
+	padding := sm.app.density.ModalPadding
+	labelWidth := tview.TaggedStringWidth(sm.defaultTeamField.GetLabel()) + 1
+	available := modalWidth - 2 - padding.Left - padding.Right - 2*settingsFormBorderPadding - labelWidth
+	if available < 1 {
+		available = 1
+	}
+	resizeInput := func(field *tview.InputField, preferred int) {
+		if preferred > available {
+			preferred = available
+		}
+		field.SetFieldWidth(preferred)
+	}
+	resizeDropdown := func(field *tview.DropDown, preferred int) {
+		if preferred > available {
+			preferred = available
+		}
+		field.SetFieldWidth(preferred)
+	}
+	resizeInput(sm.endpointField, settingsWideFieldWidth)
+	resizeInput(sm.timeoutField, 20)
+	resizeInput(sm.pageSizeField, 10)
+	resizeInput(sm.cacheTTLField, 20)
+	resizeInput(sm.searchDebounceField, 20)
+	resizeInput(sm.logFileField, settingsWideFieldWidth)
+	resizeDropdown(sm.logLevelField, 20)
+	resizeDropdown(sm.themeField, 30)
+	resizeDropdown(sm.densityField, 20)
+	resizeDropdown(sm.agentProviderField, 20)
+	resizeDropdown(sm.agentSandboxField, 20)
+	resizeDropdown(sm.agentModelField, 40)
+	resizeInput(sm.agentWorkspaceField, settingsWideFieldWidth)
+	resizeInput(sm.defaultTeamField, 40)
+	resizeInput(sm.defaultProjectField, 40)
+}
+
+func (sm *SettingsModal) settingsModalWidth() int {
+	width := settingsModalWidth
+	if sm == nil || sm.app == nil || sm.app.pages == nil {
+		return width
+	}
+	_, _, screenWidth, screenHeight := sm.app.pages.GetRect()
+	_ = screenHeight
+	if screenWidth <= 0 {
+		return width
+	}
+	maxWidth := screenWidth - settingsModalScreenMargin
+	if maxWidth < 1 {
+		maxWidth = screenWidth
+	}
+	if width > maxWidth {
+		return maxWidth
+	}
+	return width
 }
 
 // updateModalHeight recalculates and applies the modal height to fit content.
@@ -554,17 +690,264 @@ func (sm *SettingsModal) setAgentProviderOptions(options []string) {
 // Hide hides the settings modal.
 func (sm *SettingsModal) Hide() {
 	logger.Debug("tui.settings: hiding settings modal")
+	sm.closeKeybindingEditor(false)
 	sm.app.pages.RemovePage("settings")
 	sm.app.updateFocus()
 }
 
 // HandleKey handles keyboard input for the settings modal.
 func (sm *SettingsModal) HandleKey(event *tcell.EventKey) *tcell.EventKey {
+	if sm.keybindingEditorVisible() {
+		return sm.handleKeybindingEditorKey(event)
+	}
 	if event.Key() == tcell.KeyEscape {
 		sm.Hide()
 		return nil
 	}
 	return event
+}
+
+// OpenKeybindingEditor opens the compact, draft-only shortcut editor. Changes
+// remain local until the surrounding Settings form is saved.
+func (sm *SettingsModal) OpenKeybindingEditor() {
+	if sm == nil || sm.app == nil || sm.app.pages == nil {
+		return
+	}
+	if sm.keybindingEditorVisible() {
+		sm.app.pages.SendToFront(settingsKeybindingsPageName)
+		if sm.keybindingList != nil {
+			sm.app.app.SetFocus(sm.keybindingList)
+		}
+		return
+	}
+	sm.keybindingEditorBase = cloneKeybindingMap(sm.keybindingDraft)
+	sm.keybindingList = tview.NewList().
+		ShowSecondaryText(false).
+		SetHighlightFullLine(true).
+		SetMainTextColor(sm.app.theme.Foreground).
+		SetSelectedBackgroundColor(sm.app.theme.Accent).
+		SetSelectedTextColor(sm.app.theme.SelectionText)
+	sm.keybindingList.SetBackgroundColor(sm.app.theme.HeaderBg)
+	sm.keybindingList.SetChangedFunc(func(index int, _ string, _ string, _ rune) {
+		sm.selectKeybinding(index)
+	})
+	sm.keybindingInput = tview.NewInputField().
+		SetLabel("Binding ").
+		SetFieldWidth(28)
+	sm.keybindingInput.SetFieldBackgroundColor(sm.app.theme.InputBg)
+	sm.keybindingInput.SetFieldTextColor(sm.app.theme.Foreground)
+	sm.keybindingStatus = tview.NewTextView().SetWrap(true).SetWordWrap(true)
+	sm.keybindingStatus.SetBackgroundColor(sm.app.theme.HeaderBg)
+	sm.keybindingStatus.SetTextColor(sm.app.theme.SecondaryText)
+
+	title := tview.NewTextView().SetText("Keybindings")
+	title.SetBackgroundColor(sm.app.theme.HeaderBg)
+	title.SetTextColor(sm.app.theme.Accent)
+	help := tview.NewTextView().SetText("Enter: edit/save | r: reset selected | Ctrl+S or Ctrl+Enter: apply | Esc: cancel | Global: quit/palette/search | Navigation/issues only: command shortcuts | Details has no command-shortcut dispatch | Esc search clear is fixed")
+	help.SetBackgroundColor(sm.app.theme.HeaderBg)
+	help.SetTextColor(sm.app.theme.SecondaryText)
+	help.SetTextAlign(tview.AlignCenter)
+	body := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(sm.keybindingList, 0, 1, true).
+		AddItem(sm.keybindingInput, 1, 0, false).
+		AddItem(sm.keybindingStatus, 2, 0, false)
+	content := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(title, 1, 0, false).
+		AddItem(body, 0, 1, true).
+		AddItem(help, 1, 0, false)
+	content.Box = tview.NewBox().SetBackgroundColor(sm.app.theme.HeaderBg)
+	content.SetBackgroundColor(sm.app.theme.HeaderBg).
+		SetBorder(true).
+		SetTitle(" Keybindings ").
+		SetTitleColor(sm.app.theme.Foreground)
+	content.SetBorderColor(sm.app.theme.Accent)
+	padded := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(nil, 0, 1, false).
+		AddItem(content, 20, 0, true).
+		AddItem(nil, 0, 1, false)
+	sm.keybindingEditor = newResponsiveWorkspaceModal(sm.app.theme.Background, padded, 86, nil)
+	sm.refreshKeybindingList()
+	sm.app.pages.AddPage(settingsKeybindingsPageName, sm.keybindingEditor, true, true)
+	sm.app.pages.SendToFront(settingsKeybindingsPageName)
+	if sm.keybindingList != nil {
+		sm.app.app.SetFocus(sm.keybindingList)
+	}
+}
+
+func (sm *SettingsModal) keybindingEditorVisible() bool {
+	return sm != nil && sm.app != nil && sm.app.pages != nil && sm.app.pages.HasPage(settingsKeybindingsPageName)
+}
+
+func (sm *SettingsModal) handleKeybindingEditorKey(event *tcell.EventKey) *tcell.EventKey {
+	if event == nil {
+		return nil
+	}
+	if event.Key() == tcell.KeyEscape {
+		sm.closeKeybindingEditor(false)
+		return nil
+	}
+	if event.Key() == tcell.KeyCtrlS || (event.Key() == tcell.KeyEnter && event.Modifiers()&tcell.ModCtrl != 0) {
+		if sm.keybindingInput != nil {
+			if !sm.commitSelectedKeybinding() {
+				return nil
+			}
+		}
+		sm.closeKeybindingEditor(true)
+		return nil
+	}
+	if sm.keybindingInput != nil && sm.app.app.GetFocus() == sm.keybindingInput {
+		if event.Key() == tcell.KeyEnter {
+			sm.commitSelectedKeybinding()
+			return nil
+		}
+		return event
+	}
+	switch event.Key() {
+	case tcell.KeyEnter:
+		if sm.keybindingInput != nil {
+			sm.app.app.SetFocus(sm.keybindingInput)
+		}
+		return nil
+	case tcell.KeyRune:
+		switch event.Rune() {
+		case 'r':
+			sm.resetSelectedKeybinding()
+			return nil
+		case 'e':
+			if sm.keybindingInput != nil {
+				sm.app.app.SetFocus(sm.keybindingInput)
+			}
+			return nil
+		}
+	}
+	return event
+}
+
+func (sm *SettingsModal) refreshKeybindingList() {
+	if sm == nil || sm.keybindingList == nil {
+		return
+	}
+	previous := sm.keybindingSelectedID
+	sm.keybindingList.Clear()
+	selected := 0
+	for index, entry := range sm.keybindingEntries {
+		value, overridden := sm.keybindingDraft[entry.ID]
+		if !overridden || strings.TrimSpace(value) == "" {
+			value = entry.Default
+		}
+		marker := ""
+		if !overridden {
+			marker = " (default)"
+		}
+		sm.keybindingList.AddItem(fmt.Sprintf("%-30s %-18s %s%s", entry.Label, entry.Context, value, marker), entry.ID, 0, nil)
+		if entry.ID == previous {
+			selected = index
+		}
+	}
+	if len(sm.keybindingEntries) > 0 {
+		sm.keybindingList.SetCurrentItem(selected)
+		sm.selectKeybinding(selected)
+	}
+}
+
+func (sm *SettingsModal) selectKeybinding(index int) {
+	if sm == nil || index < 0 || index >= len(sm.keybindingEntries) {
+		return
+	}
+	entry := sm.keybindingEntries[index]
+	sm.keybindingSelectedID = entry.ID
+	if sm.keybindingInput != nil {
+		sm.keybindingInput.SetText(sm.keybindingDraft[entry.ID])
+	}
+	if sm.keybindingStatus != nil {
+		sm.keybindingStatus.SetText(fmt.Sprintf("%s (%s) default: %s | Leave blank to reset", entry.Label, entry.Context, entry.Default))
+	}
+}
+
+func (sm *SettingsModal) selectedKeybinding() (KeybindingSetting, bool) {
+	if sm == nil || sm.keybindingList == nil {
+		return KeybindingSetting{}, false
+	}
+	index := sm.keybindingList.GetCurrentItem()
+	if index < 0 || index >= len(sm.keybindingEntries) {
+		return KeybindingSetting{}, false
+	}
+	return sm.keybindingEntries[index], true
+}
+
+func (sm *SettingsModal) commitSelectedKeybinding() bool {
+	entry, ok := sm.selectedKeybinding()
+	if !ok || sm.keybindingInput == nil {
+		return false
+	}
+	candidate := cloneKeybindingMap(sm.keybindingDraft)
+	if candidate == nil {
+		candidate = make(map[string]string)
+	}
+	value := strings.TrimSpace(sm.keybindingInput.GetText())
+	if value == "" {
+		delete(candidate, entry.ID)
+	} else {
+		candidate[entry.ID] = value
+	}
+	normalized, err := config.NormalizeKeybindings(candidate)
+	if err != nil {
+		sm.setKeybindingStatus(err.Error())
+		return false
+	}
+	sm.keybindingDraft = normalized
+	sm.setKeybindingStatus(fmt.Sprintf("Updated %s; press Ctrl+S or Ctrl+Enter to apply, or Esc to cancel", entry.Label))
+	sm.refreshKeybindingList()
+	return true
+}
+
+func (sm *SettingsModal) resetSelectedKeybinding() {
+	entry, ok := sm.selectedKeybinding()
+	if !ok {
+		return
+	}
+	candidate := cloneKeybindingMap(sm.keybindingDraft)
+	delete(candidate, entry.ID)
+	normalized, err := config.NormalizeKeybindings(candidate)
+	if err != nil {
+		sm.setKeybindingStatus(err.Error())
+		return
+	}
+	sm.keybindingDraft = normalized
+	sm.setKeybindingStatus(fmt.Sprintf("Reset %s to default %s", entry.Label, entry.Default))
+	sm.refreshKeybindingList()
+}
+
+func (sm *SettingsModal) setKeybindingStatus(message string) {
+	if sm != nil && sm.keybindingStatus != nil {
+		sm.keybindingStatus.SetText(message)
+	}
+}
+
+// CloseKeybindingEditor closes the draft editor. apply controls whether edits
+// are retained in the surrounding Settings form draft.
+func (sm *SettingsModal) CloseKeybindingEditor(apply bool) {
+	sm.closeKeybindingEditor(apply)
+}
+
+func (sm *SettingsModal) closeKeybindingEditor(apply bool) {
+	if sm == nil {
+		return
+	}
+	if !apply && sm.keybindingEditorBase != nil {
+		sm.keybindingDraft = cloneKeybindingMap(sm.keybindingEditorBase)
+	}
+	if sm.app != nil && sm.app.pages != nil {
+		sm.app.pages.RemovePage(settingsKeybindingsPageName)
+		if sm.app.pages.HasPage("settings") {
+			sm.app.pages.SendToFront("settings")
+		}
+	}
+	sm.keybindingEditor = nil
+	sm.keybindingEditorBase = nil
+	if sm.app != nil && sm.app.app != nil && sm.form != nil && sm.app.pages != nil && sm.app.pages.HasPage("settings") {
+		sm.app.app.SetFocus(sm.form)
+	}
 }
 
 // saveSettings validates input, persists settings, and applies them to the app.
@@ -642,6 +1025,10 @@ func (sm *SettingsModal) settingsFromForm() (config.Settings, error) {
 		agentModel = sm.agentModelValues[modelIndex]
 	}
 
+	keybindings, err := config.NormalizeKeybindings(sm.keybindingDraft)
+	if err != nil {
+		return config.Settings{}, err
+	}
 	settings := config.Settings{
 		APIEndpoint:    strings.TrimSpace(sm.endpointField.GetText()),
 		Timeout:        strings.TrimSpace(sm.timeoutField.GetText()),
@@ -656,6 +1043,7 @@ func (sm *SettingsModal) settingsFromForm() (config.Settings, error) {
 		AgentSandbox:   agentSandbox,
 		AgentModel:     agentModel,
 		AgentWorkspace: strings.TrimSpace(sm.agentWorkspaceField.GetText()),
+		Keybindings:    keybindings,
 		DefaultTeam:    strings.TrimSpace(sm.defaultTeamField.GetText()),
 		DefaultProject: strings.TrimSpace(sm.defaultProjectField.GetText()),
 	}

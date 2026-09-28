@@ -159,13 +159,8 @@ func (a *App) buildIssuesTable(title string, section IssuesSection) *tview.Table
 			return
 		}
 
-		// If issue has children, toggle expand/collapse
-		if len(issue.Children) > 0 {
-			a.toggleIssueExpanded(issue.ID)
-			return
-		}
-
-		// Otherwise, focus on details
+		// Enter always opens/focuses details. Expansion is deliberately bound to
+		// Space so parent rows do not have a surprising dual action.
 		a.onIssueSelected(*issue)
 		a.focusedPane = FocusDetails
 		a.updateFocus()
@@ -180,6 +175,9 @@ func (a *App) buildIssuesTable(title string, section IssuesSection) *tview.Table
 // setupIssuesTableNavigation sets up keyboard navigation for an issues table with cross-section support.
 func (a *App) setupIssuesTableNavigation(table *tview.Table, section IssuesSection) {
 	table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if a.handleIssueSelectionKey(table, section, event) {
+			return nil
+		}
 		switch event.Key() {
 		case tcell.KeyRune:
 			switch event.Rune() {
@@ -308,14 +306,7 @@ func (a *App) setupIssuesTableNavigation(table *tview.Table, section IssuesSecti
 				return nil
 			}
 
-			// If issue has children, toggle expand/collapse
-			if len(issue.Children) > 0 {
-				a.toggleIssueExpanded(issue.ID)
-				a.activeIssuesSection = section
-				return nil
-			}
-
-			// Otherwise, focus on details
+			// Enter always opens/focuses details; Space handles expansion.
 			a.onIssueSelected(*issue)
 			a.focusedPane = FocusDetails
 			a.updateFocus()
@@ -362,6 +353,28 @@ func (a *App) setupIssuesTableNavigation(table *tview.Table, section IssuesSecti
 	})
 }
 
+func (a *App) handleIssueSelectionKey(table *tview.Table, section IssuesSection, event *tcell.EventKey) bool {
+	if event.Key() == tcell.KeyCtrlA {
+		a.selectAllVisibleIssues()
+		return true
+	}
+	if event.Key() != tcell.KeyRune || (event.Rune() != 'v' && event.Rune() != 'V') {
+		return false
+	}
+	row, _ := table.GetSelection()
+	issue := a.getIssueFromRowForSection(row, section)
+	if issue == nil {
+		return true
+	}
+	if event.Rune() == 'v' {
+		a.markedIssueSelection.Toggle(issue.ID)
+	} else {
+		a.markedIssueSelection.ExtendRange(a.visibleIssueIDs(section), issue.ID)
+	}
+	a.refreshIssueTableMarks()
+	return true
+}
+
 // getIssueFromRowForSection returns the issue for a given table row in the specified section.
 func (a *App) getIssueFromRowForSection(row int, section IssuesSection) *linearapi.Issue {
 	var rows []IssueRow
@@ -389,9 +402,103 @@ func (a *App) getRowForIssueInSection(issueID string, section IssuesSection) int
 	return getRowForIssueModel(issueID, rows)
 }
 
+// activeIssuesTable returns the table and section receiving issue-pane keys.
+func (a *App) activeIssuesTable() (*tview.Table, IssuesSection) {
+	if a.activeIssuesSection == IssuesSectionMy && a.myIssuesTable != nil {
+		return a.myIssuesTable, IssuesSectionMy
+	}
+	if a.otherIssuesTable != nil {
+		return a.otherIssuesTable, IssuesSectionOther
+	}
+	if a.myIssuesTable != nil {
+		return a.myIssuesTable, IssuesSectionMy
+	}
+	return nil, a.activeIssuesSection
+}
+
+func (a *App) cursorIssueID(section IssuesSection) string {
+	table, _ := a.activeIssuesTable()
+	if table == nil {
+		return ""
+	}
+	row, _ := table.GetSelection()
+	issue := a.getIssueFromRowForSection(row, section)
+	if issue == nil {
+		return ""
+	}
+	return issue.ID
+}
+
+func (a *App) visibleIssueIDs(section IssuesSection) []string {
+	var rows []IssueRow
+	switch section {
+	case IssuesSectionMy:
+		rows = a.myIssueRows
+	case IssuesSectionOther:
+		rows = a.otherIssueRows
+	}
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if row.IssueID != "" {
+			ids = append(ids, row.IssueID)
+		}
+	}
+	return ids
+}
+
+func (a *App) toggleMarkedCursorIssue() {
+	_, section := a.activeIssuesTable()
+	issueID := a.cursorIssueID(section)
+	if issueID == "" {
+		return
+	}
+	a.markedIssueSelection.Toggle(issueID)
+	a.refreshIssueTableMarks()
+}
+
+func (a *App) extendMarkedCursorIssue() {
+	_, section := a.activeIssuesTable()
+	issueID := a.cursorIssueID(section)
+	if issueID == "" {
+		return
+	}
+	a.markedIssueSelection.ExtendRange(a.visibleIssueIDs(section), issueID)
+	a.refreshIssueTableMarks()
+}
+
+func (a *App) selectAllVisibleIssues() {
+	_, section := a.activeIssuesTable()
+	ids := append([]string(nil), a.visibleIssueIDs(IssuesSectionMy)...)
+	ids = append(ids, a.visibleIssueIDs(IssuesSectionOther)...)
+	if len(ids) == 0 {
+		return
+	}
+	// section is intentionally read above to keep activeIssuesTable's fallback
+	// behavior consistent when both sections are empty.
+	_ = section
+	a.markedIssueSelection.SelectAllVisible(ids)
+	a.refreshIssueTableMarks()
+}
+
+// refreshIssueTableMarks redraws both sections so a mark remains visible even
+// when the cursor is moved between the two tables.
+func (a *App) refreshIssueTableMarks() {
+	if a.myIssuesTable != nil {
+		renderIssuesTableModel(a.myIssuesTable, a.myIssueRows, a.myIDToIssue, a.selectedIssueID(IssuesSectionMy), a.theme, &a.markedIssueSelection)
+	}
+	if a.otherIssuesTable != nil {
+		renderIssuesTableModel(a.otherIssuesTable, a.otherIssueRows, a.otherIDToIssue, a.selectedIssueID(IssuesSectionOther), a.theme, &a.markedIssueSelection)
+	}
+	a.updateStatusBar()
+}
+
 // renderIssuesTableModel renders a table with the given rows and issue lookup map.
-func renderIssuesTableModel(table *tview.Table, rows []IssueRow, idToIssue map[string]*linearapi.Issue, selectedIssueID string, theme Theme) {
+func renderIssuesTableModel(table *tview.Table, rows []IssueRow, idToIssue map[string]*linearapi.Issue, selectedIssueID string, theme Theme, selections ...*MarkedIssueSelection) {
 	table.Clear()
+	var marked *MarkedIssueSelection
+	if len(selections) > 0 {
+		marked = selections[0]
+	}
 
 	// Set column headers with better styling
 	headerStyle := tcell.StyleDefault.
@@ -470,7 +577,11 @@ func renderIssuesTableModel(table *tview.Table, rows []IssueRow, idToIssue map[s
 			}
 		}
 
-		table.SetCell(row, 0, tview.NewTableCell(identifierPrefix+identifier).
+		marker := "   "
+		if marked != nil && marked.IsMarked(issue.ID) {
+			marker = "(x)"
+		}
+		table.SetCell(row, 0, tview.NewTableCell(marker+identifierPrefix+identifier).
 			SetTextColor(theme.SecondaryText).
 			SetAlign(tview.AlignLeft))
 

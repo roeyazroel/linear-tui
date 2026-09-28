@@ -17,13 +17,14 @@ A terminal user interface (TUI) for Linear built with Go and tview.
 ## Features
 
 - 3-pane layout (navigation tree + issues list + details view)
-- Command palette for quick actions with keyboard shortcuts
+- Compact scrolling command palette with context-aware issue actions
 - Vim-style keyboard navigation (j/k, h/l, g/G)
 - Mouse support (click to focus, scroll to navigate)
 - Issue descriptions with markdown rendering
 - Sub-issues support (expand/collapse, create, view parent)
-- Issue management (create, edit title, edit labels, archive)
-- Comments (view and add)
+- Issue management (create, full edit, title, labels, archive, bulk actions)
+- Threaded comments with edit, delete, and reactions
+- Inbox, triage actions, favorites, saved views, and roadmap management
 - Status management (change status, assign/unassign)
 - Search and filtering
 - Sorting (by updated, created, or priority)
@@ -35,6 +36,7 @@ A terminal user interface (TUI) for Linear built with Go and tview.
 - Settings modal with live config updates
 - Themes (linear, high_contrast, color_blind, catppuccin_mocha) and density modes
 - Status bar with context and search info
+- A startup-only update notice when a newer release is available
 - Clipboard actions (issue ID, issue URL, agent output)
 
 ## Requirements
@@ -211,7 +213,6 @@ To disable logging, set `log_file` to an empty string in the settings file or vi
 - `r` - Refresh issues
 - `n` - Create new issue
 - `e` - Edit issue title
-- `g` - Edit issue labels
 - `s` - Change status
 - `a` - Assign to user
 - `m` - Assign to me
@@ -221,12 +222,20 @@ To disable logging, set `log_file` to an empty string in the settings file or vi
 - `y` - Copy issue ID
 - `w` - Copy issue URL
 - `x` - Archive issue
+- `v` / `V` - Mark issue / extend marked selection
 - `b` - Create sub-issue
 - `p` - View parent issue
 - `i` - Set parent issue
 - `d` - Remove parent
 - `]` - Expand all sub-issues
 - `[` - Collapse all sub-issues
+
+Full issue editing, labels, inbox, triage, saved views, favorites, and roadmap
+actions are available from the command palette. `Ctrl-K` also opens the palette
+and `?` opens help. Navigation chords are optional keybinding settings (for
+example, `navigate_inbox: "g i"`); by default `g` keeps jump-to-top behavior.
+Saved-view filters use an honest raw JSON editor. Comment activity is threaded
+comments and reactions, not a full Linear audit log.
 
 ## Development
 

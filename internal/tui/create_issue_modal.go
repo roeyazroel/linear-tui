@@ -180,18 +180,38 @@ func NewCreateIssueModal(app *App) *CreateIssueModal {
 	padding := app.density.ModalPadding
 	modalContent.SetBorderPadding(padding.Top, padding.Bottom, padding.Left, padding.Right)
 
-	// Center the modal on screen
-	cm.modal = tview.NewFlex().
+	// Center the modal on screen and resize its fields when the terminal narrows.
+	centered := tview.NewFlex().
+		SetDirection(tview.FlexRow).
 		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().
-			SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(modalContent, 20, 0, true).
-			AddItem(nil, 0, 1, false), 75, 0, true).
+		AddItem(modalContent, 20, 0, true).
 		AddItem(nil, 0, 1, false)
-	cm.modal.SetBackgroundColor(app.theme.Background)
+	cm.modal = newResponsiveWorkspaceModal(app.theme.Background, centered, 75, cm.resizeFields)
 
 	return cm
+}
+
+func (cm *CreateIssueModal) resizeFields(modalWidth int) {
+	fieldWidth := modalWidth - 18
+	if fieldWidth < 1 {
+		fieldWidth = 1
+	}
+	if titleItem := cm.form.GetFormItemByLabel("Title"); titleItem != nil {
+		if inputField, ok := titleItem.(*tview.InputField); ok {
+			inputField.SetFieldWidth(fieldWidth)
+		}
+	}
+	if descItem := cm.form.GetFormItemByLabel("Description"); descItem != nil {
+		if textArea, ok := descItem.(*tview.TextArea); ok {
+			textArea.SetSize(4, fieldWidth)
+		}
+	}
+	if fieldWidth > 50 {
+		fieldWidth = 50
+	}
+	for _, field := range []*tview.DropDown{cm.assigneeField, cm.cycleField, cm.priorityField} {
+		field.SetFieldWidth(fieldWidth)
+	}
 }
 
 // Show displays the create issue modal.
