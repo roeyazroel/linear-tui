@@ -85,7 +85,7 @@ func favoriteLeafNode(favorite linearapi.Favorite) *NavigationNode {
 			if label == "" {
 				label = "All Issues"
 			}
-			return &NavigationNode{ID: "all", Text: label}
+			return &NavigationNode{ID: string(KeySequenceDestinationAll), Text: label}
 		default:
 			logger.Debug("tui.favorites: skipping unsupported predefined view type=%s id=%s", favorite.PredefinedViewType, favorite.ID)
 			return nil

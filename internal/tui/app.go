@@ -1401,7 +1401,7 @@ func (a *App) rebuildNavigationTree(teams []linearapi.Team, favorites []linearap
 	// Add "All Issues" at the top
 	allIssues := tview.NewTreeNode("All Issues").
 		SetColor(a.theme.Foreground).
-		SetReference(&NavigationNode{ID: "all", Text: "All Issues"}).
+		SetReference(&NavigationNode{ID: string(KeySequenceDestinationAll), Text: "All Issues"}).
 		SetExpanded(true)
 	root.AddChild(allIssues)
 
@@ -1427,7 +1427,7 @@ func (a *App) rebuildNavigationTree(teams []linearapi.Team, favorites []linearap
 
 	a.navigationTree.SetRoot(root)
 	a.navigationTree.SetCurrentNode(allIssues)
-	a.selectedNavigation = &NavigationNode{ID: "all", Text: "All Issues"}
+	a.selectedNavigation = &NavigationNode{ID: string(KeySequenceDestinationAll), Text: "All Issues"}
 }
 
 // onTeamExpanded loads projects for a team when it's expanded.
@@ -3320,10 +3320,10 @@ func (a *App) prepareGlobalSearchContext() {
 	if a.selectedNavigation == nil || strings.TrimSpace(a.selectedNavigation.CustomViewID) == "" {
 		return
 	}
-	if node := a.findNavigationTreeNode(func(nav *NavigationNode) bool { return nav.ID == "all" && !nav.IsIssue }); node != nil && a.navigationTree != nil {
+	if node := a.findNavigationTreeNode(func(nav *NavigationNode) bool { return nav.ID == string(KeySequenceDestinationAll) && !nav.IsIssue }); node != nil && a.navigationTree != nil {
 		a.navigationTree.SetCurrentNode(node)
 	}
-	a.selectedNavigation = &NavigationNode{ID: "all", Text: "All Issues"}
+	a.selectedNavigation = &NavigationNode{ID: string(KeySequenceDestinationAll), Text: "All Issues"}
 	a.richFilters = IssueFilters{}
 	a.reapplyKeybindings()
 }
@@ -3762,12 +3762,12 @@ func (a *App) navigateKeySequenceDestination(destination KeySequenceDestination)
 	}
 	switch destination {
 	case KeySequenceDestinationAll:
-		if node := a.findNavigationTreeNode(func(nav *NavigationNode) bool { return nav.ID == "all" && !nav.IsIssue }); node != nil {
+		if node := a.findNavigationTreeNode(func(nav *NavigationNode) bool { return nav.ID == string(KeySequenceDestinationAll) && !nav.IsIssue }); node != nil {
 			a.selectKeySequenceTreeNode(node)
 			return true
 		}
 		a.richFilters = IssueFilters{}
-		a.selectedNavigation = &NavigationNode{ID: "all", Text: "All Issues"}
+		a.selectedNavigation = &NavigationNode{ID: string(KeySequenceDestinationAll), Text: "All Issues"}
 		a.reapplyKeybindings()
 		a.focusedPane = FocusIssues
 		a.updateFocus()
