@@ -6,7 +6,7 @@ toolchain go1.24.11
 
 require (
 	github.com/charmbracelet/glamour v0.10.0
-	github.com/gdamore/tcell/v2 v2.13.7
+	github.com/gdamore/tcell/v2 v2.13.9
 	github.com/rivo/tview v0.42.0
 	github.com/shurcooL/graphql v0.0.0-20230722043721-ed46e5a46466
 )
