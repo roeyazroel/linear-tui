@@ -130,6 +130,14 @@ export LINEAR_API_KEY="your-api-key-here"
 linear-tui
 ```
 
+### Open on a team or project
+
+`--team` (key or name) and `--project` (name, within `--team`) choose where this launch opens, overriding `default_team` and `default_project` without changing `config.json`:
+
+```bash
+linear-tui --team ENG --project "Mobile App"
+```
+
 ### Homebrew
 
 ```bash

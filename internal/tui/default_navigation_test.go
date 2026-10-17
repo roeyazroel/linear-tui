@@ -140,6 +140,25 @@ func TestApplyDefaultNavigationSelectsProject(t *testing.T) {
 	}
 }
 
+func TestApplyDefaultNavigationStartupFlagsOverrideConfig(t *testing.T) {
+	app := newDefaultNavTestApp(config.Config{DefaultTeam: "ENG"})
+	app.SetStartupNavigation("NEX", "Mobile App")
+	refreshDone := installRefreshCompletionHook(app)
+	teams := defaultNavTeams()
+	app.rebuildNavigationTree(teams, nil)
+
+	app.applyDefaultNavigation(context.Background(), teams)
+	waitForRefreshCompletion(t, refreshDone)
+
+	nav := currentNavigationNode(t, app)
+	if !nav.IsProject || nav.ID != "proj-2" || nav.TeamID != "team-2" {
+		t.Fatalf("current node = %+v, want project node proj-2 in team-2", nav)
+	}
+	if app.config.DefaultTeam != "ENG" || app.config.DefaultProject != "" {
+		t.Fatalf("config defaults = %q/%q, want ENG/\"\" unchanged", app.config.DefaultTeam, app.config.DefaultProject)
+	}
+}
+
 func TestApplyDefaultNavigationUnknownTeamKeepsAllIssues(t *testing.T) {
 	app := newDefaultNavTestApp(config.Config{DefaultTeam: "MISSING"})
 	teams := defaultNavTeams()

@@ -583,6 +583,8 @@ type App struct {
 	quitFunc                func()
 	startupUpdateCheck      func(context.Context) string
 	startupUpdateOnce       sync.Once
+	startupTeam             string
+	startupProject          string
 }
 
 // FocusTarget indicates which pane has focus.
@@ -729,6 +731,15 @@ func (a *App) Run() error {
 func (a *App) SetStartupUpdateCheck(check func(context.Context) string) {
 	if a != nil {
 		a.startupUpdateCheck = check
+	}
+}
+
+// SetStartupNavigation opens the app on a team (and optionally a project)
+// instead of the configured defaults. It never changes the saved settings.
+func (a *App) SetStartupNavigation(team, project string) {
+	if a != nil {
+		a.startupTeam = team
+		a.startupProject = project
 	}
 }
 

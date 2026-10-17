@@ -10,12 +10,17 @@ import (
 	"github.com/roeyazroel/linear-tui/internal/logger"
 )
 
-// applyDefaultNavigation selects the configured default team (and optionally
-// project) once teams have loaded. It must run off the UI goroutine; UI
-// mutations are queued. Missing teams or projects log a warning and flash the
-// status bar, leaving the standard "All Issues" selection in place.
+// applyDefaultNavigation selects the startup team (and optionally project)
+// once teams have loaded: the --team/--project flags when given, otherwise the
+// configured defaults. It must run off the UI goroutine; UI mutations are
+// queued. Missing teams or projects log a warning and flash the status bar,
+// leaving the standard "All Issues" selection in place.
 func (a *App) applyDefaultNavigation(ctx context.Context, teams []linearapi.Team) bool {
-	teamQuery := strings.TrimSpace(a.config.DefaultTeam)
+	teamTarget, projectTarget := a.config.DefaultTeam, a.config.DefaultProject
+	if a.startupTeam != "" {
+		teamTarget, projectTarget = a.startupTeam, a.startupProject
+	}
+	teamQuery := strings.TrimSpace(teamTarget)
 	if teamQuery == "" {
 		return false
 	}
@@ -38,7 +43,7 @@ func (a *App) applyDefaultNavigation(ctx context.Context, teams []linearapi.Team
 	}
 
 	var project *linearapi.Project
-	projectQuery := strings.TrimSpace(a.config.DefaultProject)
+	projectQuery := strings.TrimSpace(projectTarget)
 	if projectQuery != "" {
 		if projectsErr != nil {
 			logger.Warning("tui.app: failed to load default project team_id=%s project=%q error=%v", team.ID, projectQuery, projectsErr)

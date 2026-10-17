@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"os"
 
@@ -29,7 +31,20 @@ func run(args []string) int {
 		return runAuth(args[1:])
 	}
 
-	return runTUI()
+	flags := flag.NewFlagSet("linear-tui", flag.ContinueOnError)
+	team := flags.String("team", "", "open on this team (key or name) instead of default_team")
+	project := flags.String("project", "", "open on this project (name) within --team")
+	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
+		return 0
+	} else if err != nil {
+		return 2
+	}
+	if *project != "" && *team == "" {
+		fmt.Fprintln(os.Stderr, "Error: --project requires --team")
+		return 2
+	}
+
+	return runTUI(*team, *project)
 }
 
 // runAuth handles `linear-tui auth ...` subcommands.
@@ -83,8 +98,9 @@ func runAuth(args []string) int {
 	}
 }
 
-// runTUI boots the interactive application with resolved credentials.
-func runTUI() int {
+// runTUI boots the interactive application with resolved credentials, opening
+// on team/project when given.
+func runTUI(team, project string) int {
 	settingsPath, err := config.ConfigFilePath()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error determining settings path: %v\n", err)
@@ -161,6 +177,7 @@ func runTUI() int {
 	}
 
 	app := tui.NewApp(apiClient, cfg, promptTemplates)
+	app.SetStartupNavigation(team, project)
 	app.SetStartupUpdateCheck(func(ctx context.Context) string {
 		return updatecheck.Check(ctx, Version)
 	})

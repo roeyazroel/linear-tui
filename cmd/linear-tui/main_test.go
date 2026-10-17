@@ -55,6 +55,30 @@ func TestRunAuthUnknown(t *testing.T) {
 	}
 }
 
+func TestRunProjectRequiresTeam(t *testing.T) {
+	oldStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+
+	code := run([]string{"--project", "Website"})
+
+	_ = w.Close()
+	os.Stderr = oldStderr
+
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(r)
+	out := buf.String()
+	if code != 2 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if !strings.Contains(out, "--project requires --team") {
+		t.Fatalf("stderr = %q", out)
+	}
+}
+
 func TestRunVersion(t *testing.T) {
 	oldStdout := os.Stdout
 	r, w, err := os.Pipe()
